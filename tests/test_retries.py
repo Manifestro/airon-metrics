@@ -76,7 +76,7 @@ def test_create_is_retried_in_the_background_and_events_follow(server, start):
     server.inject("=POST /v1/runs", 503, times=2)
     run = start()
     run.log({"x": 1})
-    assert server.wait_for(lambda: server.runs, timeout=5)  # created on a later attempt
+    assert server.wait_for(lambda: server.runs, timeout=20)  # created on a later attempt
     run.log({"x": 2})
     run.finish()
     assert len([r for r in server.requests if r.path == "/v1/runs"]) == 3

@@ -284,6 +284,7 @@ class Run:
             with self._lock:
                 if self._log_calls == 0:
                     self._next_step = last_step + 1
+        _log.say(f"tracking run {self.name} -> {self.url}")  # the server's link, not a guess
         self._created.set()
 
     def _console_events(self) -> list[dict[str, Any]]:
@@ -620,9 +621,8 @@ def _init(args: dict[str, Any]) -> Run:
 
 
 def _announce(run: Run) -> None:
-    if run.mode == "online":
-        _log.say(f"tracking run {run.name} -> {run.url}")
-    else:
+    # Online runs announce themselves once the server has answered, so the link is the real one.
+    if run.mode != "online":
         _log.say(
             f"run {run.name} is saved in {run._spool.directory} (offline); upload it with `airon sync`"
         )

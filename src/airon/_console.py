@@ -106,7 +106,7 @@ class ConsoleCapture:
 
     def _add(self, stream: str, line: str) -> None:
         line = _ANSI.sub("", line).rstrip()
-        if not line:
+        if not line or line.startswith("airon: "):  # the SDK's own messages are not training output
             return
         if len(self._lines) == self._lines.maxlen:
             self._omitted += 1

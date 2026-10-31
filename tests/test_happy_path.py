@@ -227,6 +227,7 @@ def test_server_warnings_are_shown_once(server, start, capsys):
 def test_terminal_lines_and_quiet(server, start, monkeypatch, capsys):
     monkeypatch.delenv("AIRON_QUIET")
     run = start(name="baseline-v2")
+    server.wait_for(lambda: server.runs)
     run.finish()
     err = capsys.readouterr().err
     assert f"airon: tracking run baseline-v2 -> {server.url}/runs/{run.id}" in err

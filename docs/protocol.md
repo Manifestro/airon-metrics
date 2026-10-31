@@ -29,7 +29,7 @@ Conventions
 Used by `airon doctor` and `airon login` to check the address and the key.
 
 ```json
-{"ok": true, "protocol": 1, "key": {"name": "pod-h100", "scope": "tracking"}, "server_time": 1730402880.1}
+{"ok": true, "protocol": 1, "key": {"name": "pod-h100", "scope": "tracker"}, "server_time": 1730402880.1}
 ```
 
 ## POST /v1/runs: create or reopen a run

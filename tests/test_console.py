@@ -187,3 +187,9 @@ def test_console_false_leaves_streams_alone(server, start):
     run = start(console=False)
     assert sys.stdout is original
     run.finish()
+
+
+def test_the_sdks_own_messages_are_not_training_output(capture):
+    capture.feed("stderr", "airon: tracking run x -> http://example.test/runs/1\n")
+    capture.feed("stdout", "epoch 1 done\n")
+    assert texts(capture) == [("stdout", "epoch 1 done")]
