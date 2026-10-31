@@ -240,8 +240,8 @@ class SystemSampler:
     def __init__(self, emit: Callable[[dict[str, float]], None], interval: float = 10.0):
         self._emit = emit
         self._interval = max(0.05, interval)
-        self._gpus = GpuReader()
-        self._host = HostReader()
+        self._gpus: GpuReader | None = None
+        self._host: HostReader | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="airon-system", daemon=True)
 
@@ -253,9 +253,16 @@ class SystemSampler:
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
             self._thread.join(timeout=2.0)
 
+    def _open_readers(self) -> tuple[GpuReader, HostReader]:
+        # Created on the sampler thread: importing psutil and finding nvidia-smi cost real time.
+        if self._gpus is None or self._host is None:
+            self._gpus, self._host = GpuReader(), HostReader()
+        return self._gpus, self._host
+
     def sample(self) -> dict[str, float]:
+        gpus, host = self._open_readers()
         values: dict[str, float] = {}
-        for gpu in self._gpus.read():
+        for gpu in gpus.read():
             prefix = f"gpu{gpu['index']}"
             for key, name in (
                 ("util", "util_pct"),
@@ -266,11 +273,15 @@ class SystemSampler:
             ):
                 if gpu.get(key) is not None:
                     values[f"{prefix}/{name}"] = round(float(gpu[key]), 1)
-        values.update(self._host.read())
+        values.update(host.read())
         return values
 
     def _loop(self) -> None:
         # The first sample comes early so even short runs have a hardware point.
+        try:
+            self._open_readers()
+        except Exception:
+            return
         wait = min(1.0, self._interval)
         while not self._stop.wait(wait):
             wait = self._interval

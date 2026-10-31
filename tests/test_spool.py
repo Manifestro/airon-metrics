@@ -110,7 +110,8 @@ def test_sync_with_a_bad_key_fails_clearly_and_keeps_the_spool(
     assert cli.main(["sync"]) == 1
     captured = capsys.readouterr()
     assert (
-        "rejected the key" in captured.err and "wrong-wrong-wrong" not in captured.err + captured.out
+        "rejected the key" in captured.err
+        and "wrong-wrong-wrong" not in captured.err + captured.out
     )
     assert run_dir(spool_root).exists()
 

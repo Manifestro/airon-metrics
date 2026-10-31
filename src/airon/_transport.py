@@ -146,6 +146,8 @@ class Client:
                 raw = exc.read()
             except Exception:
                 raw = b""
+            finally:
+                exc.close()
             return self._from_response(exc.code, exc.headers, raw)
         except Exception as exc:
             kind, text = classify_exception(exc)
