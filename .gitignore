@@ -32,3 +32,6 @@ credentials.json
 
 # Local Claude Code state
 .claude/
+
+# uv resolves the dev environment itself; the SDK is a library
+uv.lock

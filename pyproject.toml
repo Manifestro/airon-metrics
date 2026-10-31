@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "airon"
+dynamic = ["version"]
+description = "Track machine learning runs: metrics, progress and hardware load, sent to an Airon server without ever slowing training down."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Manifestro" }]
+keywords = ["machine-learning", "experiment-tracking", "metrics", "monitoring", "mlops"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+gpu = ["nvidia-ml-py"]
+system = ["psutil"]
+dev = ["pytest>=7", "pytest-timeout", "ruff", "mypy", "build", "twine"]
+
+[project.scripts]
+airon = "airon.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Manifestro/airon-metrics"
+Issues = "https://github.com/Manifestro/airon-metrics/issues"
+Changelog = "https://github.com/Manifestro/airon-metrics/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+path = "src/airon/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/airon"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/airon", "tests", "docs", "examples", "README.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 60
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "W"]
+ignore = [
+  "E501",   # the formatter wraps code; long message strings are fine
+  "SIM105", # try/except/pass is the clearer way to say "never raise into the caller"
+]
+
+[tool.mypy]
+strict = true
+files = ["src/airon"]
