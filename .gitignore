@@ -30,7 +30,7 @@ credentials.json
 .vscode/
 *.swp
 
-# Local Claude Code state
+# Local tool state
 .claude/
 
 # uv resolves the dev environment itself; the SDK is a library
