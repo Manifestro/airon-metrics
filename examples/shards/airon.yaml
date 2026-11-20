@@ -1,0 +1,8 @@
+# A job split over two machines: each handles its part of 20 clips, a merge puts them together.
+#   airon launch examples/shards/airon.yaml --experiment XX-01
+resources: {gpu: g5.xlarge, ttl: 1h, shards: 2}
+stages:
+  setup: python3 -m venv .venv && .venv/bin/pip install -q airon
+  dry: cd examples/shards && ../../.venv/bin/python work.py --limit 2
+  train: cd examples/shards && ../../.venv/bin/python work.py
+  merge: cd examples/shards && ../../.venv/bin/python merge.py
