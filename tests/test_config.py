@@ -114,7 +114,8 @@ def test_corrupt_credentials_file_is_ignored(tmp_path):
 def test_source_contains_no_server_addresses():
     """The SDK has no default server and the repository is public."""
     root = Path(airon.__file__).parent
-    allowed = ("example.com", "localhost", "127.0.0.1", "github.com/Manifestro")
+    # GitHub appears because a job machine clones code from it; it is not an Airon server.
+    allowed = ("example.com", "localhost", "127.0.0.1", "github.com/")
     for path in root.rglob("*.py"):
         for url in re.findall(r"https?://[A-Za-z0-9][^\s\"')`>]*", path.read_text()):
             assert any(a in url for a in allowed), f"{path.name}: {url}"

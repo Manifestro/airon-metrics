@@ -141,6 +141,7 @@ Arguments to `airon.init` beat environment variables, which beat the credentials
 | `airon version` | Print the version |
 | `airon check [file]` | Validate `airon.yaml` with the server without running anything |
 | `airon run [file] [--from STAGE]` | Run `airon.yaml` here, stage by stage, reporting every stage to Airon ([jobs](docs/usage.md#jobs-aironyaml-and-airon-run)) |
+| `airon launch [file]` | Run `airon.yaml` on a machine Airon rents (billable); the commit must be pushed. The machine is switched off when the job is over |
 | `airon status DY-40[/2]` | Show a job: every attempt and stage, and why it failed |
 | `airon stop DY-40[/2]` | Stop a job; the machine running it hears it within 30 seconds |
 

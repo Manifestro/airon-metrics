@@ -1,0 +1,12 @@
+# A job that exercises every stage on a small GPU machine. Launch it for a running experiment:
+#   airon launch examples/job/airon.yaml --experiment XX-01
+resources: {gpu: g5.xlarge, disk: 60, ttl: 1h}
+stages:
+  setup: python3 -m venv .venv && .venv/bin/pip install -q airon
+  test: .venv/bin/python -c "import airon; print('airon', airon.__version__)"
+  dry: cd examples/job && ../../.venv/bin/python train.py --max-steps 20
+  train: cd examples/job && ../../.venv/bin/python train.py --steps 60
+  eval: echo "eval would run here"
+checkpoint: {every: 10m, to: /tmp/airon-example-ckpt}
+estimate: {steps: 60}
+on_fail: {hold: 15m}

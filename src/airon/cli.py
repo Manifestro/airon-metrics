@@ -9,6 +9,7 @@ import argparse
 import getpass
 import os
 import platform
+import subprocess
 import sys
 import time
 import uuid
@@ -390,6 +391,74 @@ def cmd_run(args: argparse.Namespace) -> int:
     return runner.run(args.from_stage)
 
 
+def _pushed(root: Path) -> bool:
+    """True when HEAD is on some remote branch, so a new machine can fetch it."""
+    try:
+        out = subprocess.run(
+            ["git", "branch", "-r", "--contains", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and bool(out.stdout.strip())
+
+
+def cmd_launch(args: argparse.Namespace) -> int:
+    found = _read_job_file(args)
+    pair = _connection_client(timeout=120.0)
+    if found is None or pair is None:
+        return EXIT_USAGE
+    path, text = found
+    client, _ = pair
+    repo = _job.repository(path.parent.resolve())
+    if not repo.get("commit") or not repo.get("remote"):
+        print("airon: launch needs a git checkout with a remote (origin).", file=sys.stderr)
+        return EXIT_USAGE
+    if not _pushed(repo["root"]):
+        print(
+            f"airon: commit {repo['commit'][:12]} is not on any remote branch; push it first, "
+            "the new machine clones it from there.",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+    if repo.get("dirty"):
+        print("airon: note: uncommitted changes stay here; the machine runs the commit.")
+    body = {
+        "yaml": text,
+        "mode": "aws",
+        "experiment": args.experiment,
+        "commit": repo["commit"],
+        "repository_url": repo["remote"],
+    }
+    result = client.request("POST", "/v1/jobs", body)
+    if not result.ok:
+        print(f"airon: cannot launch: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    job = result.data or {}
+    for warning in job.get("warnings") or []:
+        print(f"airon: warning: {warning}")
+    machine = job.get("machine") or {}
+    price = machine.get("price_per_hr")
+    print(
+        f"airon: {job['job']} launched on {machine.get('gpu') or 'a machine'} "
+        f"({machine.get('pod_id')}"
+        + (f", ${price:.2f}/h" if isinstance(price, (int, float)) else "")
+        + f"), {job.get('url')}"
+    )
+    print(
+        f"airon: follow it with `airon status {job['job']}`; stop it with `airon stop {job['job']}`."
+    )
+    return EXIT_OK
+
+
+def cmd_agent(_: argparse.Namespace) -> int:
+    return _job.agent()
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     pair = _connection_client()
     if pair is None:
@@ -461,6 +530,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
     run.add_argument("--from", dest="from_stage", choices=_job.STAGES, help="start at this stage")
     run.set_defaults(func=cmd_run)
+    launch = commands.add_parser(
+        "launch", help="run airon.yaml on a machine Airon rents (billable); needs a pushed commit"
+    )
+    launch.add_argument("file", nargs="?", help="path to the file (default: airon.yaml)")
+    launch.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
+    launch.set_defaults(func=cmd_launch)
+    commands.add_parser(
+        "agent", help="run this machine's job (started by the launch, not by people)"
+    ).set_defaults(func=cmd_agent)
     status = commands.add_parser("status", help="show a job: DY-40 (its latest) or DY-40/2")
     status.add_argument("job")
     status.set_defaults(func=cmd_status)

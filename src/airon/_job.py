@@ -7,9 +7,11 @@ See the server's docs/jobs.md for the contract.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -183,8 +185,11 @@ class Runner:
         server_url: str,
         say: Say = _say,
         heartbeat: float = HEARTBEAT,
+        source: dict[str, str] | None = None,
     ):
         self.client = client
+        # On a machine Airon rented, where to clone the code from: {"url", "commit"}.
+        self.source = source
         self.job = job
         self.spec: dict[str, Any] = job["spec"]
         self.root = root
@@ -227,7 +232,7 @@ class Runner:
             for g in self._gpus.read()
         ]
         host = self._host.read()
-        usage = shutil.disk_usage(self.root)
+        usage = shutil.disk_usage(self.root if self.root.exists() else self.root.parent)
         return {
             "host": platform.node(),
             "stage": self.stage,
@@ -304,12 +309,19 @@ class Runner:
         env.update(extra or {})
         return env
 
-    def execute(self, stage: str, command: str, extra: dict[str, str] | None = None) -> int:
+    def execute(
+        self,
+        stage: str,
+        command: str,
+        extra: dict[str, str] | None = None,
+        cwd: Path | None = None,
+        shown: str | None = None,
+    ) -> int:
         """Runs one shell command of a stage and returns its exit code (negative: a signal)."""
-        self.say(f"airon: {stage}: {command}")
+        self.say(f"airon: {stage}: {shown or command}")
         child = subprocess.Popen(
             ["bash", "-eo", "pipefail", "-c", command],
-            cwd=self.root,
+            cwd=cwd or self.root,
             env=self.environment(stage, extra),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -382,6 +394,8 @@ class Runner:
     def _stage(self, stage: str, commands: dict[str, str]) -> bool | None:
         """True passed, False failed or stopped, None skipped."""
         if stage == "clone":
+            if self.source:
+                return self._clone(self.source)
             self.report(
                 stage, "skipped", reason="airon run uses this checkout as it is", detail=self._git()
             )
@@ -415,6 +429,35 @@ class Runner:
             return False
         self.report(stage, "passed", exit_code=0)
         return True
+
+    def _clone(self, source: dict[str, str]) -> bool:
+        """Clone the repository at the job's commit into the work folder. A GitHub token from the
+        pod's secret (GH_TOKEN) is passed to git through its environment, so it is neither shown
+        nor written into the checkout."""
+        url, commit = source.get("url") or "", source.get("commit") or ""
+        self.report("clone", "running", detail={"url": url, "commit": commit})
+        if not url or not commit:
+            self.report("clone", "failed", reason="the job names no repository or commit")
+            return False
+        url, extra = git_access(url, os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+        self.root.parent.mkdir(parents=True, exist_ok=True)
+        if self.root.exists():
+            shutil.rmtree(self.root)
+        command = (
+            f"git clone --quiet --no-checkout {_q(url)} {_q(str(self.root))} && "
+            f"git -C {_q(str(self.root))} checkout --quiet --detach {_q(commit)}"
+        )
+        code = self.execute(
+            "clone", command, extra, cwd=self.root.parent, shown=f"git clone {url} @ {commit}"
+        )
+        if code != 0:
+            hint = (
+                "; is the commit pushed, and may GH_TOKEN in the pod secret read the repository?"
+                if code == 128
+                else ""
+            )
+            return self._ended("clone", code, _exit_reason(code) + hint)
+        return self._ended("clone", 0)
 
     def _git(self) -> dict[str, Any]:
         info = repository(self.root)
@@ -475,6 +518,58 @@ class Runner:
             self.say(f"airon: dry: {problem}")
         self.report("dry", "failed", reason=" ".join(problems) or "the dry run's checks failed")
         return False
+
+
+def _q(text: str) -> str:
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def git_access(url: str, token: str | None) -> tuple[str, dict[str, str]]:
+    """The URL to clone and the environment that lets git read a private GitHub repository: an
+    SSH address becomes HTTPS (a fresh machine has no SSH key for GitHub), and the token goes in
+    an extra header through git's environment-only configuration."""
+    found = re.match(r"^(?:ssh://)?git@github\.com[:/](.+?)(?:\.git)?/?$", url)
+    if found:
+        url = f"https://github.com/{found.group(1)}.git"
+    if not token or not url.startswith("https://github.com/"):
+        return url, {}
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return url, {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def agent(say: Say = _say) -> int:
+    """`airon agent`: on a machine Airon rented, fetch this machine's job and run it. The job key
+    and the server's address come from the environment the launch set up."""
+    from . import _config
+
+    connection = _config.resolve_connection()
+    if not connection.complete:
+        say("airon agent: AIRON_URL and AIRON_API_KEY (the job key) are needed")
+        return 2
+    assert connection.url and connection.api_key
+    client = Client(connection.url, connection.api_key, timeout=30.0)
+    result = Result("retry")
+    for attempt in range(10):  # the network may come up a little after the service
+        result = client.request("GET", "/v1/job", timeout=30)
+        if result.ok or result.status in (401, 403):
+            break
+        time.sleep(min(30, 2**attempt))
+    if not result.ok:
+        say(f"airon agent: cannot fetch the job: {_plain(result)}")
+        return 1
+    job = dict(result.data or {})
+    job["token"] = connection.api_key
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", str(job.get("job") or "job"))
+    root = Path.home() / "work" / label
+    say(f"airon agent: running {job.get('job')} in {root}")
+    source = {"url": str(job.get("repository_url") or ""), "commit": str(job.get("commit") or "")}
+    runner = Runner(client, job, root, connection.url, say=say, source=source)
+    return runner.run(job.get("from_stage"))
 
 
 def _exit_reason(code: int) -> str:

@@ -143,6 +143,17 @@ Stages run in that fixed order and stop at the first failure. The dry run must u
 size (only fewer steps), so an out-of-memory error shows up in it. When it saved a checkpoint, the
 command runs a second time with `AIRON_RESUME` set to it, and must continue past it.
 
+To run the same file on a GPU machine instead, push the commit and launch it; Airon rents the
+machine (`resources.gpu` picks the instance type), the machine clones the commit and runs the
+stages, and it is switched off when the job is over, or `on_fail.hold` after a failure so someone
+can look:
+
+```bash
+git push
+airon launch            # billable from here
+airon status DY-40
+```
+
 Inside a job, `airon.init()` needs no arguments: it attaches to the job's run. Continue from a
 checkpoint when Airon asks for it:
 

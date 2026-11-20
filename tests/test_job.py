@@ -26,11 +26,20 @@ class JobServer:
         self.check = {"ok": True, "problems": [], "warnings": []}
         self.dry = {"ok": True, "problems": [], "warnings": [], "checkpoint": None}
         self.commands: list[dict[str, Any]] = []
+        self.job: dict[str, Any] = {}
         server = self
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args: Any) -> None:
                 pass
+
+            def do_GET(self) -> None:  # noqa: N802
+                raw = json.dumps(server.job).encode()
+                self.send_response(200 if server.job else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
 
             def do_POST(self) -> None:  # noqa: N802
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
@@ -206,3 +215,73 @@ def test_fingerprint_follows_input_files(tmp_path: Path) -> None:
     (tmp_path / "requirements.lock").write_text("torch==2.6")
     assert _job.fingerprint("pip install", tmp_path, ["requirements.lock"]) != before
     assert _job.fingerprint("pip install -U", tmp_path, ["requirements.lock"]) != before
+
+
+def git_repo(path: Path) -> str:
+    """A repository with one commit holding a marker file; returns the commit."""
+    import subprocess
+
+    path.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=path, check=True, capture_output=True)  # noqa: E731
+    run("init", "-q")
+    (path / "marker.txt").write_text("from the commit")
+    run("add", "-A")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first")
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def test_a_rented_machine_clones_the_commit(jobs: JobServer, tmp_path: Path) -> None:
+    commit = git_repo(tmp_path / "origin")
+    work = tmp_path / "work" / "XP-01-1"
+    made = runner(jobs, work, {"train": "cat marker.txt"})
+    made.source = {"url": str(tmp_path / "origin"), "commit": commit}
+    assert made.run() == 0
+    assert ("clone", "passed") in jobs.states()
+    assert ("stdout", "from the commit") in [(x["stream"], x["text"]) for x in jobs.lines]
+
+
+def test_a_commit_that_is_not_there_says_so(jobs: JobServer, tmp_path: Path) -> None:
+    git_repo(tmp_path / "origin")
+    made = runner(jobs, tmp_path / "work" / "x", {"train": "touch trained"})
+    made.source = {"url": str(tmp_path / "origin"), "commit": "0" * 40}
+    assert made.run() == 1
+    failed = [body for stage, state, body in jobs.stages if state == "failed"]
+    assert failed[0]["stage"] == "clone"
+    assert "is the commit pushed" in failed[0]["reason"]
+
+
+def test_git_access_reads_private_github_without_writing_the_token() -> None:
+    url, env = _job.git_access("git@github.com:acme/model.git", "secret")
+    assert url == "https://github.com/acme/model.git"
+    assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    assert "secret" not in url
+    assert _job.git_access("https://github.com/acme/model", None) == (
+        "https://github.com/acme/model",
+        {},
+    )
+    assert _job.git_access("https://gitlab.com/a/b.git", "secret")[1] == {}
+
+
+def test_agent_fetches_its_job_and_runs_it(
+    jobs: JobServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit = git_repo(tmp_path / "origin")
+    jobs.job = {
+        "job": "XP-01/3",
+        "run_id": "00000000-0000-0000-0000-000000000003",
+        "project": "lab",
+        "experiment": "XP-01",
+        "repository_url": str(tmp_path / "origin"),
+        "commit": commit,
+        "spec": {"stages": {"train": "test -f marker.txt && echo $AIRON_JOB"}},
+    }
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "job-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    said: list[str] = []
+    assert _job.agent(say=said.append) == 0
+    assert (tmp_path / "home" / "work" / "XP-01-3" / "marker.txt").exists()
+    assert ("finish", "passed") in jobs.states()
+    assert any(line["text"] == "XP-01/3" for line in jobs.lines)

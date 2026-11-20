@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.3.0] - unreleased
+
+Jobs on machines Airon rents. Needs an Airon server that can launch jobs.
+
+### Added
+
+- `airon launch [file]`: sends `airon.yaml` with the pushed commit and the repository; Airon
+  rents the machine, which runs the job and is switched off when it is over.
+- `airon agent`: what such a machine runs. It fetches its job, clones the repository at the commit
+  (a GitHub token from the pod secret, `GH_TOKEN`, reaches git through its environment only, and an
+  SSH address becomes HTTPS), and runs the stages like `airon run`.
+- `examples/job`: a job that exercises every stage.
+
 ## [0.2.0] - 2026-11-20
 
 Jobs: describe the work in `airon.yaml` and let `airon run` execute it stage by stage, so a
