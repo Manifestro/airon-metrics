@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.4.0] - 2026-11-20
+
+Checkpoints kept by Airon. Needs an Airon server with a checkpoint bucket; without one, checkpoints are recorded where they were saved, as before.
+
+### Added
+
+- Inside a job, `run.checkpoint(path)` copies the file or folder at once and uploads it in the background to Airon's checkpoint store through presigned URLs (in parts when large); the process waits for uploads before it ends (`AIRON_CHECKPOINT_WAIT`, default an hour). A failed upload, or a server without a store, still records the checkpoint where it was saved.
+- `airon.resume()` downloads the checkpoint Airon asks the job to continue from and returns a local path (a folder comes back as a folder; cached). `airon.fetch(uri)` does the same for any stored checkpoint, also outside a job after `airon login`.
+- A retried job, and a job with `checkpoint.from`, gets the checkpoint to continue from in `AIRON_RESUME` for its train stage and dry run.
+- Dry-run checkpoints are labelled `dry`.
+
+### Changed
+
+- `airon init` writes `checkpoint: {every: 30m}`; `checkpoint.to` is no longer needed.
+
 ## [0.3.0] - 2026-11-20
 
 Jobs on machines Airon rents. Needs an Airon server that can launch jobs.

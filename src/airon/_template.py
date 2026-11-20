@@ -49,7 +49,8 @@ TEMPLATE = """\
 #     for step in range(start, total):
 #         run.log({{"train/loss": loss}}, step=step)
 #         if step % 500 == 0:
-#             run.checkpoint(save(step), step=step)   # a path or URI; the file stays where it is
+#             run.checkpoint(save(step), step=step)   # a file or folder: copied, then uploaded to
+#                                                     # Airon's store in the background
 #
 # WHEN SOMETHING FAILS
 #   The cause is recorded (the exception, the exit code; 137 means killed for lack of memory, the
@@ -84,10 +85,10 @@ datasets: []                       # names from Airon's dataset catalogue that t
 estimate: {{steps: 10000}}           # steps of the full train: the dry run's speed turns it into
                                    # time and cost, and Airon refuses a run that cannot fit in ttl
 
-checkpoint: {{every: 30m, to: /home/ubuntu/checkpoints}}
-                                   # save at least this often. On the machine's disk a retry on
-                                   # the same machine finds them; s3://bucket/path survives the
-                                   # machine itself
+checkpoint: {{every: 30m}}           # save at least this often (run.checkpoint): each one goes to
+                                   # Airon's store, where any machine can read it; a dead machine
+                                   # loses no more than this. `from: DY-40` (or DY-40/2, or an
+                                   # s3:// address) starts this job from another one's checkpoint
 
 on_fail: {{hold: 30m}}               # keep the machine this long after a failure, for a retry
 quiet_ok: 20m                      # no output and an idle GPU for this long counts as stuck

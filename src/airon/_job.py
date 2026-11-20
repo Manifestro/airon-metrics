@@ -415,7 +415,7 @@ class Runner:
         self.report(stage, "running", fingerprint=fingerprint(command, self.root, inputs))
         if stage == "dry":
             return self._dry(command)
-        code = self.execute(stage, command)
+        code = self.execute(stage, command, self._resume() if stage == "train" else None)
         return self._ended(stage, code)
 
     def _ended(self, stage: str, code: int, reason: str | None = None) -> bool:
@@ -493,8 +493,17 @@ class Runner:
         self.report("check", "passed", detail={"gpus": [g.get("name") for g in facts["gpus"]]})
         return True
 
+    def _resume(self) -> dict[str, str] | None:
+        """AIRON_RESUME for train (and the dry run's first pass) when Airon names a checkpoint to
+        start from: the job's own last one on a retry, or `checkpoint.from`."""
+        found = self.job.get("resume") or {}
+        if found.get("uri"):
+            self.say(f"airon: continuing from {found['uri']} (step {found.get('step')})")
+            return {"AIRON_RESUME": str(found["uri"])}
+        return None
+
     def _dry(self, command: str) -> bool:
-        code = self.execute("dry", command)
+        code = self.execute("dry", command, self._resume())
         if code != 0 or self.stopping.is_set():
             return self._ended("dry", code)
         first = self._post("/v1/job/dry", {"phase": "first"})

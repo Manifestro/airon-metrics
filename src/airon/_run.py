@@ -110,6 +110,8 @@ class Run:
         self._sender: Sender
         self._console: ConsoleCapture | None = None
         self._sampler: SystemSampler | None = None
+        # Inside a job, checkpoints are copied and uploaded to Airon's storage in the background.
+        self._uploader: Any = None
 
     # ---- public API ----------------------------------------------------------------------
 
@@ -186,9 +188,23 @@ class Run:
     def checkpoint(
         self, uri: str, step: int | None = None, label: str | None = None, **metrics: Any
     ) -> None:
-        """Record where a checkpoint lives. Nothing is uploaded: the URI is only a pointer."""
+        """Record a checkpoint. Inside a job (`airon run`, `airon launch`), a local file or folder
+        is copied at once and uploaded to Airon's storage in the background, where any machine can
+        read it; the call returns before the upload ends. Elsewhere, or for a URI (hf://, s3://),
+        only a pointer is recorded."""
         if self._finished or self._child:
             return
+        try:
+            if self._store(uri, step, label, metrics):
+                return
+        except Exception as exc:
+            _log.warn_once("ckpt", f"checkpoint() could not store {uri} ({exc}); kept a pointer")
+        self._pointer(uri, step, label, metrics)
+
+    def _pointer(
+        self, uri: str, step: int | None, label: str | None, metrics: dict[str, Any]
+    ) -> None:
+        """Record where a checkpoint is, without storing it."""
         try:
             point: dict[str, Any] = {"uri": str(uri)}
             at = _as_int(step)
@@ -206,6 +222,28 @@ class Run:
             _log.warn_once(
                 "log-internal", f"checkpoint() failed ({type(exc).__name__}: {exc}); ignored"
             )
+
+    def _store(
+        self, uri: str, step: int | None, label: str | None, metrics: dict[str, Any]
+    ) -> bool:
+        from . import _checkpoints
+
+        if "://" in str(uri) or not os.path.exists(str(uri)):
+            return False
+        if self._uploader is None:
+            client = _checkpoints.job_client()
+            if client is None:
+                return False
+            # A checkpoint that cannot be stored (no storage on the server, the network down) is
+            # still recorded where it was saved, so resuming on this machine keeps working.
+            self._uploader = _checkpoints.Uploader(
+                client, _config.env("AIRON_STAGE"), fallback=self._pointer
+            )
+        at = _as_int(step)
+        clean = _values.metrics(metrics, _log.warn_once) if metrics else {}
+        return bool(
+            self._uploader.submit(str(uri), at if at is not None else self._last_step, label, clean)
+        )
 
     def finish(self, status: str | None = None, exit_code: int | None = None) -> None:
         """End the run: send what is queued (at most ``shutdown_timeout`` seconds) and its status.
@@ -303,6 +341,12 @@ class Run:
                 _log.warn_once("status", f"unknown status {status!r}; using 'finished'")
                 status = "finished"
             self._finished = True
+            if self._uploader is not None:
+                # A checkpoint that never reached storage is lost with the machine: wait for it.
+                limit = float(_config.env("AIRON_CHECKPOINT_WAIT") or 3600)
+                _log.say("waiting for checkpoint uploads to finish")
+                if not self._uploader.wait(limit):
+                    _log.warn_once("ckpt-wait", "checkpoint uploads did not finish in time")
             _hooks.unregister(self)
             if self._sampler:
                 self._sampler.stop()
@@ -680,7 +724,16 @@ def finish(status: str | None = None, exit_code: int | None = None) -> None:
 
 
 def resume() -> str | None:
-    """Where to continue training from, when Airon asks for it: the checkpoint's URI during the
-    dry run's second pass (and later after a restart), otherwise None. Use it in the training
-    script's resume logic, next to its own `--resume auto`."""
-    return _config.env("AIRON_RESUME")
+    """The checkpoint to continue from when Airon asks for one, as a local path ready to load
+    (downloaded from Airon's storage if needed); None when there is none."""
+    from . import _checkpoints
+
+    return _checkpoints.resume()
+
+
+def fetch(uri: str) -> str:
+    """Download any checkpoint Airon keeps (an s3:// address from `list_checkpoints` or the web)
+    and return its local path; a saved folder comes back as a folder. Cached."""
+    from . import _checkpoints
+
+    return _checkpoints.fetch(uri)

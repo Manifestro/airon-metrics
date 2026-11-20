@@ -7,6 +7,6 @@ stages:
   dry: cd examples/job && ../../.venv/bin/python train.py --max-steps 20
   train: cd examples/job && ../../.venv/bin/python train.py --steps 60
   eval: echo "eval would run here"
-checkpoint: {every: 10m, to: /tmp/airon-example-ckpt}
+checkpoint: {every: 10m}
 estimate: {steps: 60}
 on_fail: {hold: 15m}

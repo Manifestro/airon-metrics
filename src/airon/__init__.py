@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from . import _run
 from ._run import NoopRun as NoopRun
 from ._run import Run as Run
+from ._run import fetch as fetch
 from ._run import finish as finish
 from ._run import init as init
 from ._run import log as log
