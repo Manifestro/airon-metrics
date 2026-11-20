@@ -441,7 +441,7 @@ class Runner:
         if not url or not commit:
             self.report("clone", "failed", reason="the job names no repository or commit")
             return False
-        url, extra = git_access(url, os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+        url, extra = git_access(url, github_token())
         self.root.parent.mkdir(parents=True, exist_ok=True)
         here = _q(str(self.root))
         if (self.root / ".git").exists():
@@ -542,6 +542,14 @@ class Runner:
 
 def _q(text: str) -> str:
     return "'" + text.replace("'", "'\\''") + "'"
+
+
+# The names a GitHub token goes by in pod secrets, in the order they are tried.
+GITHUB_TOKEN_NAMES = ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_API")
+
+
+def github_token() -> str | None:
+    return next((os.environ[n] for n in GITHUB_TOKEN_NAMES if os.environ.get(n)), None)
 
 
 def git_access(url: str, token: str | None) -> tuple[str, dict[str, str]]:

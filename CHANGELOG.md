@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.4.1] - 2026-11-20
+
+### Fixed
+
+- A job's machine also finds its GitHub token under `GITHUB_API` (besides `GH_TOKEN` and
+  `GITHUB_TOKEN`), the name pod secrets use, so private repositories clone.
+
 ## [0.4.0] - 2026-11-20
 
 Checkpoints kept by Airon. Needs an Airon server with a checkpoint bucket; without one, checkpoints are recorded where they were saved, as before.

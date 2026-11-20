@@ -446,3 +446,13 @@ def test_init_writes_a_template_that_explains_itself(
     assert cli.main(["init"]) == 2  # never overwrites by surprise
     assert cli.main(["init", "--force"]) == 0
     assert "experiment: CHANGE-ME" in (tmp_path / "airon.yaml").read_text()
+
+
+def test_the_github_token_is_found_under_any_of_its_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _job.GITHUB_TOKEN_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    assert _job.github_token() is None
+    monkeypatch.setenv("GITHUB_API", "from-the-pod-secret")
+    assert _job.github_token() == "from-the-pod-secret"
+    monkeypatch.setenv("GH_TOKEN", "preferred")
+    assert _job.github_token() == "preferred"
