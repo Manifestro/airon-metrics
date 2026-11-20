@@ -493,7 +493,7 @@ def init(
     resume: str = "never",
     run_id: str | None = None,
     system_metrics: bool = True,
-    console: bool = True,
+    console: bool | None = None,
     mode: str | None = None,
     url: str | None = None,
     api_key: str | None = None,
@@ -545,6 +545,10 @@ def _init(args: dict[str, Any]) -> Run:
         name = str(args["name"])[:200] if args["name"] else friendly_name()
         project = str(args["project"] or _config.env("AIRON_PROJECT") or _default_project())[:200]
         resume = _resolve_resume(args["resume"])
+        if resume == "never" and _config.env("AIRON_JOB"):
+            # A job's run already exists and several processes write to it, one after another:
+            # continue its numbering instead of starting over.
+            resume = "allow"
         tuning = Tuning(
             flush_interval=max(0.01, args["flush_interval"]),
             heartbeat_interval=max(0.05, args["heartbeat_interval"]),
@@ -597,7 +601,10 @@ def _init(args: dict[str, Any]) -> Run:
             on_created=run._on_created,
             extras=run._console_events,
         )
-        if args["console"]:
+        # Inside a job (`airon run`) the runner already ships the console; capturing it twice
+        # would duplicate every line.
+        console = args["console"] if args["console"] is not None else not _config.env("AIRON_JOB")
+        if console:
             run._console = ConsoleCapture(args["console_lines"])
         if args["system_metrics"]:
             run._sampler = SystemSampler(
@@ -670,3 +677,10 @@ def finish(status: str | None = None, exit_code: int | None = None) -> None:
     run = _current
     if run is not None:
         run.finish(status, exit_code)
+
+
+def resume() -> str | None:
+    """Where to continue training from, when Airon asks for it: the checkpoint's URI during the
+    dry run's second pass (and later after a restart), otherwise None. Use it in the training
+    script's resume logic, next to its own `--resume auto`."""
+    return _config.env("AIRON_RESUME")

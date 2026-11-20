@@ -36,7 +36,7 @@ def test_python_dash_m_airon_works():
     done = subprocess.run(
         [sys.executable, "-m", "airon", "version"], capture_output=True, text=True, timeout=60
     )
-    assert done.returncode == 0 and "airon 0.1.0" in done.stdout
+    assert done.returncode == 0 and f"airon {airon.__version__}" in done.stdout
 
 
 def test_no_command_prints_help_and_exits_2(capsys):

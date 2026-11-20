@@ -139,6 +139,10 @@ Arguments to `airon.init` beat environment variables, which beat the credentials
 | `airon doctor` | Check address, key, reachability and protocol version, write a tiny test run and print its link, with a fix for each failure |
 | `airon sync` | Upload runs that were saved on disk |
 | `airon version` | Print the version |
+| `airon check [file]` | Validate `airon.yaml` with the server without running anything |
+| `airon run [file] [--from STAGE]` | Run `airon.yaml` here, stage by stage, reporting every stage to Airon ([jobs](docs/usage.md#jobs-aironyaml-and-airon-run)) |
+| `airon status DY-40[/2]` | Show a job: every attempt and stage, and why it failed |
+| `airon stop DY-40[/2]` | Stop a job; the machine running it hears it within 30 seconds |
 
 Exit codes: 0 success, 1 a check or an upload failed, 2 wrong usage or nothing configured.
 

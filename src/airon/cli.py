@@ -1,4 +1,4 @@
-"""The ``airon`` command: login, logout, doctor, sync, version.
+"""The ``airon`` command: login, logout, doctor, sync, version, and jobs: check, run, status, stop.
 
 Exit codes: 0 success, 1 a check or upload failed, 2 wrong usage or nothing configured.
 """
@@ -13,10 +13,11 @@ import sys
 import time
 import uuid
 from functools import partial
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from . import _config, _log
+from . import _config, _job, _log
 from ._spool import list_spools
 from ._sync import AuthError, sync_all
 from ._transport import Client, Result
@@ -292,6 +293,141 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return EXIT_FAILED if failed else EXIT_OK
 
 
+# --- jobs (airon.yaml) ----------------------------------------------------------------------------
+
+
+def _connection_client(timeout: float = 30.0) -> tuple[Client, str] | None:
+    connection = _config.resolve_connection()
+    if not connection.complete:
+        print(
+            "No server configured. Set AIRON_URL and AIRON_API_KEY, or run `airon login`.",
+            file=sys.stderr,
+        )
+        return None
+    assert connection.url and connection.api_key
+    return Client(connection.url, connection.api_key, timeout=timeout), connection.url
+
+
+def _find_file(name: str | None) -> Path | None:
+    if name:
+        path = Path(name)
+        return path if path.is_file() else None
+    here = Path.cwd()
+    top = _job.repository(here)["root"]
+    for folder in (here, top):
+        if (folder / "airon.yaml").is_file():
+            return folder / "airon.yaml"
+    return None
+
+
+def _read_job_file(args: argparse.Namespace) -> tuple[Path, str] | None:
+    path = _find_file(args.file)
+    if path is None:
+        print(
+            f"No {args.file or 'airon.yaml'} here or at the root of the repository.",
+            file=sys.stderr,
+        )
+        return None
+    return path, path.read_text(encoding="utf-8")
+
+
+def _print_report(report: dict[str, Any]) -> None:
+    for error in report.get("errors") or []:
+        print(f"  error    {error}")
+    for warning in report.get("warnings") or []:
+        print(f"  warning  {warning}")
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    found = _read_job_file(args)
+    pair = _connection_client()
+    if found is None or pair is None:
+        return EXIT_USAGE
+    path, text = found
+    client, _ = pair
+    body = {"yaml": text, "mode": "local" if args.local else "aws", "experiment": args.experiment}
+    result = client.request("POST", "/v1/jobs/check", body)
+    if not result.ok:
+        print(f"Could not check {path}: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    report = result.data or {}
+    experiment = report.get("experiment")
+    print(f"{path}" + (f" for {experiment['code']} ({experiment['title']})" if experiment else ""))
+    _print_report(report)
+    print("  ok, ready to run" if report.get("ok") else "  not ready, see above")
+    return EXIT_OK if report.get("ok") else EXIT_FAILED
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    found = _read_job_file(args)
+    pair = _connection_client()
+    if found is None or pair is None:
+        return EXIT_USAGE
+    path, text = found
+    client, url = pair
+    repo = _job.repository(path.parent.resolve())
+    if repo.get("dirty"):
+        print("airon: note: the checkout has uncommitted changes; the run is marked dirty.")
+    body = {
+        "yaml": text,
+        "mode": "local",
+        "experiment": args.experiment,
+        "from_stage": args.from_stage,
+        "commit": repo.get("commit"),
+        "dirty": repo.get("dirty", False),
+        "repository_url": repo.get("remote"),
+        "host": platform.node(),
+    }
+    result = client.request("POST", "/v1/jobs", body)
+    if not result.ok:
+        print(f"airon: cannot start: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    job = result.data or {}
+    for warning in job.get("warnings") or []:
+        print(f"airon: warning: {warning}")
+    print(f"airon: {job['job']} started, {job.get('url')}")
+    runner = _job.Runner(Client(url, job["token"], timeout=30.0), job, repo["root"], url)
+    return runner.run(args.from_stage)
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    pair = _connection_client()
+    if pair is None:
+        return EXIT_USAGE
+    client, _ = pair
+    result = client.request("GET", f"/v1/jobs/{args.job}/status")
+    if not result.ok:
+        print(f"airon: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    job = result.data or {}
+    print(f"{job['job']}  {job['status']}  ({job['mode']}, commit {job.get('commit') or '-'})")
+    for attempt in job.get("attempts") or []:
+        dirty = " dirty" if attempt.get("dirty") else ""
+        print(
+            f"  attempt {attempt['attempt']}: {attempt['status']}{dirty} on {attempt.get('host') or '-'}"
+        )
+        for stage in attempt.get("stages") or []:
+            why = f"  {stage['reason']}" if stage.get("reason") else ""
+            print(f"    {stage['name']:<7} {stage['state']}{why}")
+        error = attempt.get("error")
+        if error and attempt["status"] != "running":
+            print(f"  cause: {error.get('message')}")
+    return EXIT_OK
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    pair = _connection_client()
+    if pair is None:
+        return EXIT_USAGE
+    client, _ = pair
+    result = client.request("POST", f"/v1/jobs/{args.job}/stop", {})
+    if not result.ok:
+        print(f"airon: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"{args.job}: stopping; the machine hears it within 30 seconds.")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="airon",
@@ -314,6 +450,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.set_defaults(func=cmd_sync)
     commands.add_parser("version", help="print the version").set_defaults(func=cmd_version)
+
+    check = commands.add_parser("check", help="validate airon.yaml with the server, run nothing")
+    check.add_argument("file", nargs="?", help="path to the file (default: airon.yaml)")
+    check.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
+    check.add_argument("--local", action="store_true", help="check for `airon run`, not launch")
+    check.set_defaults(func=cmd_check)
+    run = commands.add_parser("run", help="run airon.yaml here, stage by stage, reporting to Airon")
+    run.add_argument("file", nargs="?", help="path to the file (default: airon.yaml)")
+    run.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
+    run.add_argument("--from", dest="from_stage", choices=_job.STAGES, help="start at this stage")
+    run.set_defaults(func=cmd_run)
+    status = commands.add_parser("status", help="show a job: DY-40 (its latest) or DY-40/2")
+    status.add_argument("job")
+    status.set_defaults(func=cmd_status)
+    stop = commands.add_parser("stop", help="stop a job")
+    stop.add_argument("job")
+    stop.set_defaults(func=cmd_stop)
     return parser
 
 

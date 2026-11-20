@@ -17,6 +17,7 @@ from ._run import Run as Run
 from ._run import finish as finish
 from ._run import init as init
 from ._run import log as log
+from ._run import resume as resume
 from ._version import __version__ as __version__
 
 if TYPE_CHECKING:

@@ -113,6 +113,47 @@ from a checkpoint at a different step.
 If the server cannot be reached at that moment, the run continues in offline mode. Make sure the
 server is reachable when you resume; events numbered while it was not may be treated as duplicates.
 
+## Jobs: `airon.yaml` and `airon run`
+
+Instead of starting scripts by hand, describe the work once in `airon.yaml` at the root of the
+repository and let `airon run` execute it. Every stage is reported to Airon, so a script that dies
+before it imports `airon`, a shell command that fails, a process killed for memory or a resume that
+does not work are all visible, with the reason, without anyone watching a terminal.
+
+```yaml
+experiment: DY-40                        # a running experiment in Airon
+stages:                                  # shell commands, run with bash -eo pipefail
+  setup: pip install -r requirements.lock
+  data:  python -m data.fetch my-dataset
+  test:  pytest -x -q tests/fast
+  dry:   python train.py -c cfg.yaml --max-steps 50
+  train: python train.py -c cfg.yaml --resume auto
+  eval:  python eval.py --ckpt best
+checkpoint: {every: 30m, to: "s3://bucket/dy-40/"}
+estimate: {steps: 15000}                 # lets the dry run tell how long train will take
+```
+
+```bash
+airon check --local    # the server validates the file, nothing runs
+airon run              # clone, setup, data, check, test, dry, train, eval, finish
+airon status DY-40     # from anywhere
+```
+
+Stages run in that fixed order and stop at the first failure. The dry run must use the real batch
+size (only fewer steps), so an out-of-memory error shows up in it. When it saved a checkpoint, the
+command runs a second time with `AIRON_RESUME` set to it, and must continue past it.
+
+Inside a job, `airon.init()` needs no arguments: it attaches to the job's run. Continue from a
+checkpoint when Airon asks for it:
+
+```python
+start = load_checkpoint(path) if (path := airon.resume()) else 0
+run = airon.init()
+for step in range(start, total):
+    ...
+    run.checkpoint(save(step), step=step)
+```
+
 ## Offline and `airon sync`
 
 Without a server address (or with `AIRON_MODE=offline`) a run is written to
