@@ -737,3 +737,33 @@ def fetch(uri: str) -> str:
     from . import _checkpoints
 
     return _checkpoints.fetch(uri)
+
+
+def shard(items: Any) -> list[Any]:
+    """This machine's part of `items` in a job split over several machines (`resources.shards`):
+    every n-th item from its shard number. The whole list when the job is not split."""
+    from . import _checkpoints
+
+    return _checkpoints.shard(items)
+
+
+def shard_info() -> tuple[int, int]:
+    """(this machine's shard number, how many shards); (0, 1) when the job is not split."""
+    from . import _checkpoints
+
+    return _checkpoints.shard_info()
+
+
+def output(path: str) -> bool:
+    """Store a result (file or folder) in Airon's store with this job's outputs: kept for good,
+    readable by the merge stage (`outputs()`) and by anyone with a key (`fetch`)."""
+    from . import _checkpoints
+
+    return _checkpoints.output(path)
+
+
+def outputs() -> list[dict[str, Any]]:
+    """Every result the shards of this job stored, for the merge stage: [{uri, name, shard}]."""
+    from . import _checkpoints
+
+    return _checkpoints.outputs()

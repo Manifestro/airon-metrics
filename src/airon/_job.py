@@ -25,7 +25,7 @@ from . import _log
 from ._system import GpuReader, HostReader
 from ._transport import Client, Result
 
-STAGES = ("clone", "setup", "data", "check", "test", "dry", "train", "eval", "finish")
+STAGES = ("clone", "setup", "data", "check", "test", "dry", "train", "eval", "merge", "finish")
 HEARTBEAT = 30.0
 LOG_FLUSH = 2.0
 LOG_BATCH = 500
@@ -410,6 +410,17 @@ class Runner:
         command = commands.get(stage)
         if command is None:
             self.report(stage, "skipped", reason="not in airon.yaml")
+            return None
+        if stage in (self.spec.get("skip") or []):
+            # A shard after the first: shard 0 already proved this; or the merge machine, which
+            # only sets up and merges.
+            if stage == "merge":
+                why = "merge runs once, after every shard"
+            elif "AIRON_SHARD" not in (self.spec.get("env") or {}):
+                why = "the merge machine only sets up and merges"
+            else:
+                why = "shard 0 proved it"
+            self.report(stage, "skipped", reason=why)
             return None
         inputs = (self.spec.get("inputs") or {}).get(stage) or []
         self.report(stage, "running", fingerprint=fingerprint(command, self.root, inputs))

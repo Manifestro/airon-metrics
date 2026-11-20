@@ -52,6 +52,15 @@ TEMPLATE = """\
 #             run.checkpoint(save(step), step=step)   # a file or folder: copied, then uploaded to
 #                                                     # Airon's store in the background
 #
+# SPLITTING THE WORK OVER SEVERAL MACHINES (resources.shards: 8)
+#   Shard 0 starts alone; once its dry run has passed, shards 1-7 start and skip test and dry.
+#   Each machine gets AIRON_SHARD (0-7) and AIRON_SHARDS (8); the script takes its part with
+#       files = airon.shard(sorted(all_files))          # every 8th file, a different start each
+#       airon.output("results/part.jsonl")              # kept in Airon's store, never deleted
+#   A `merge` stage then runs once on one more machine: airon.outputs() lists every shard's
+#   results and airon.fetch(uri) downloads one. A failed shard is retried alone
+#   (airon retry DY-40/4.3) while the others go on; `airon status DY-40/4` shows every shard.
+#
 # WHEN SOMETHING FAILS
 #   The cause is recorded (the exception, the exit code; 137 means killed for lack of memory, the
 #   last error line). The machine is kept for on_fail.hold so you can look (`airon status` prints
@@ -71,6 +80,7 @@ resources:
   disk: 100                        # GB; the machine image alone takes 75
   ttl: 12h                         # Airon switches the machine off after this, whatever happens
   wait: 6h                         # how long to wait when no machine is free (0: fail at once)
+  # shards: 8                      # split the work over 8 machines (see SPLITTING below)
 
 stages:
   setup: {setup}{setup_note}
@@ -79,6 +89,7 @@ stages:
   dry: {train} --max-steps 50{train_note}
   train: {train}
   # eval: python eval.py --ckpt best
+  # merge: python merge.py                          # with shards: once, after every shard
 
 datasets: []                       # names from Airon's dataset catalogue that this job reads
 

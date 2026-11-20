@@ -159,6 +159,21 @@ When a stage fails, the machine is kept for a while (`on_fail.hold`) with everyt
 Fix the code, push, and `airon retry DY-40`: the same machine fetches the commit and goes on from
 the failed stage. Once the machine is gone, `airon retry` rents a new one.
 
+To split work over several machines, set `resources.shards: 8`. Shard 0 starts first; once its
+dry run has passed, the other seven start. Each takes its part with `airon.shard(...)` and stores
+results with `airon.output(path)`; an optional `merge` stage runs once at the end and reads them
+with `airon.outputs()` and `airon.fetch(uri)`:
+
+```python
+import airon
+
+files = airon.shard(sorted(glob.glob("data/*.wav")))   # this machine's part
+with open("part.jsonl", "w") as out:
+    for f in files:
+        out.write(json.dumps(transcribe(f)) + "\n")
+airon.output("part.jsonl")
+```
+
 When AWS has no machine of the type right now, the job waits (`queued`) and starts by itself once
 one is free, for up to `resources.wait` (default 6h). While a machine is up, `airon status` also
 prints its `ssh` command, for emergencies.

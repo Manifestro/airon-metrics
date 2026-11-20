@@ -446,6 +446,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         print(f"airon: warning: {warning}")
     machine = job.get("machine") or {}
     price = machine.get("price_per_hr")
+    if job.get("shards"):
+        print(
+            f"airon: {job['job']} is split over {job['shards']} machines; {job['first']} goes "
+            "first, the others start once its dry run has passed."
+        )
     print(
         f"airon: {job['job']} launched on {machine.get('gpu') or 'a machine'} "
         f"({machine.get('pod_id')}"
@@ -504,6 +509,15 @@ def cmd_retry(args: argparse.Namespace) -> int:
         print(f"airon: cannot retry: {_job._plain(result)}", file=sys.stderr)
         return EXIT_FAILED
     job = result.data or {}
+    if job.get("retried"):
+        for shard in job["retried"]:
+            same = (shard.get("machine") or {}).get("same_machine")
+            how = "same machine" if same else shard["status"]
+            print(
+                f"airon: {shard['job']} attempt {shard['attempt']} from {shard.get('from_stage')} ({how})"
+            )
+        print(f"airon: follow it with `airon status {job['job']} --watch`.")
+        return EXIT_OK
     machine = job.get("machine") or {}
     where = (
         "on the same machine"
@@ -548,6 +562,14 @@ def _print_job(job: dict[str, Any]) -> None:
         print(
             f"  the machine is kept for a look until {job['held_until']}; `airon stop` ends it now"
         )
+    if job.get("group"):
+        group = job["group"]
+        print(f"  shard {job.get('shard')} of {group['job']} ({group['status']})")
+    for shard in job.get("shards") or []:
+        where = f" at {shard['stage']}" if shard.get("stage") else ""
+        why = f"  {shard['cause']}" if shard.get("cause") else ""
+        waiting = f"  waiting: {shard['waiting_for']}" if shard.get("waiting_for") else ""
+        print(f"  {shard['job']:<14} {shard['status']}{where}{why}{waiting}")
 
 
 def _events(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
@@ -566,6 +588,17 @@ def _events(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
             if seen.get((attempt["attempt"], stage["name"])) != stage["state"]:
                 why = f": {stage['reason']}" if stage.get("reason") else ""
                 lines.append(f"{stage['name']} {stage['state']}{why}")
+    shards_before = {
+        s["job"]: (s["status"], s.get("stage")) for s in (before or {}).get("shards") or []
+    }
+    for shard in after.get("shards") or []:
+        now = (shard["status"], shard.get("stage"))
+        if shards_before.get(shard["job"]) != now:
+            at = f" at {now[1]}" if now[1] else ""
+            why = (
+                f": {shard['cause']}" if shard.get("cause") and shard["status"] != "running" else ""
+            )
+            lines.append(f"{shard['job']} {shard['status']}{at}{why}")
     return lines
 
 

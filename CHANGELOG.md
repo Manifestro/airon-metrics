@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.0] - 2026-11-20
+
+Jobs split over several machines (`resources.shards`). Needs an Airon server with shards.
+
+### Added
+
+- `airon.shard(items)` and `airon.shard_info()`: this machine's part of the work in a split job.
+- `airon.output(path)`: store a result of the job in Airon's store, kept for good; and
+  `airon.outputs()`, every shard's results, for the `merge` stage.
+- A `merge` stage, run once after every shard on its own machine.
+- `airon status` lists every shard of a split job, and `--watch` reports each shard's changes;
+  `airon retry DY-40/4` retries every failed shard, `airon retry DY-40/4.3` one.
+
+### Changed
+
+- A job's machine skips the stages Airon marks as done elsewhere: a later shard skips test and dry,
+  which shard 0 proved.
+
 ## [0.4.1] - 2026-11-20
 
 ### Fixed

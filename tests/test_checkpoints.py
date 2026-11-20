@@ -46,7 +46,24 @@ class Storage:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
-            def do_GET(self) -> None:  # noqa: N802  (a presigned download URL)
+            def do_GET(self) -> None:  # noqa: N802  (a presigned download URL, or the outputs)
+                if self.path == "/v1/job/outputs":
+                    listed = [
+                        {
+                            "uri": f"s3://bucket/{r['key']}",
+                            "name": r["key"].rsplit("/", 1)[-1],
+                            "shard": 0,
+                        }
+                        for r in store.recorded
+                        if r.get("label") == "output"
+                    ]
+                    raw = json.dumps({"outputs": listed}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
                 data = store.objects[self.path.removeprefix("/get/")]
                 store.downloads += 1
                 self.send_response(200)
@@ -57,7 +74,17 @@ class Storage:
             def do_POST(self) -> None:  # noqa: N802
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
                 base = store.url
-                if self.path == "/v1/job/checkpoint/start":
+                if self.path == "/v1/job/checkpoint/start" and body.get("kind") == "output":
+                    key = f"lab/XP-01/1/shard-0/outputs/{body['filename']}"
+                    self._json(
+                        {
+                            "key": key,
+                            "uri": f"s3://bucket/{key}",
+                            "part_size": store.part_size,
+                            "parts": [{"number": 1, "url": f"{base}/put/{key}?part=1"}],
+                        }
+                    )
+                elif self.path == "/v1/job/checkpoint/start":
                     key = f"lab/XP-01/1/step-{body['step']:09d}/{body['filename']}"
                     count = max(1, -(-body["size"] // store.part_size))
                     self._json(
@@ -212,3 +239,38 @@ def test_without_storage_on_the_server_the_checkpoint_is_still_recorded(
     assert [p["checkpoint"]["step"] for p in pointers] == [5, 6]
     assert pointers[0]["checkpoint"]["uri"] == str(weights)
     del original
+
+
+def test_shard_takes_this_machines_part(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = [f"a{i:04d}.wav" for i in range(3000)]
+    assert airon.shard_info() == (0, 1) and airon.shard(files) == files  # not split: everything
+    monkeypatch.setenv("AIRON_SHARDS", "8")
+    parts = []
+    for i in range(8):
+        monkeypatch.setenv("AIRON_SHARD", str(i))
+        parts.append(airon.shard(files))
+    assert sorted(f for part in parts for f in part) == files  # every file once
+    assert {len(p) for p in parts} == {375}
+    monkeypatch.setenv("AIRON_SHARD", "9")  # nonsense: treated as not split
+    assert airon.shard_info() == (0, 1)
+
+
+def test_outputs_are_stored_and_listed_for_the_merge(
+    storage: Storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from airon import _checkpoints
+
+    monkeypatch.setattr(_checkpoints, "_outputs", None)
+    result = tmp_path / "part-0.jsonl"
+    result.write_text('{"text": "hello"}\n')
+    assert airon.output(str(result)) is True
+    listed = airon.outputs()  # waits for the upload first
+    assert [(o["name"], o["shard"]) for o in listed] == [("part-0.jsonl", 0)]
+    assert storage.objects["lab/XP-01/1/shard-0/outputs/part-0.jsonl"] == b'{"text": "hello"}\n'
+    assert Path(airon.fetch(listed[0]["uri"])).read_text() == '{"text": "hello"}\n'
+
+
+def test_outputs_outside_a_job_do_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("AIRON_JOB", raising=False)
+    (tmp_path / "x").write_text("x")
+    assert airon.output(str(tmp_path / "x")) is False

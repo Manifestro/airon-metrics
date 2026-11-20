@@ -8,6 +8,7 @@ Airon's storage through presigned URLs: the machine holds no storage credentials
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import os
 import queue
@@ -68,7 +69,12 @@ class Uploader:
         self.failed: list[str] = []
 
     def submit(
-        self, path: str, step: int | None, label: str | None, metrics: dict[str, Any]
+        self,
+        path: str,
+        step: int | None,
+        label: str | None,
+        metrics: dict[str, Any],
+        kind: str = "checkpoint",
     ) -> bool:
         if self.disabled:
             return False
@@ -97,8 +103,9 @@ class Uploader:
                 "staging": staging,
                 "source": str(path),
                 "step": step,
-                "label": label,
+                "label": "output" if kind == "output" else label,
                 "metrics": metrics,
+                "kind": kind,
             }
         )
         return True
@@ -140,7 +147,7 @@ class Uploader:
         started = self._client.request(
             "POST",
             "/v1/job/checkpoint/start",
-            {"size": size, "step": item["step"], "filename": file.name},
+            {"size": size, "step": item["step"], "filename": file.name, "kind": item.get("kind")},
             timeout=120,
         )
         if not started.ok:
@@ -241,6 +248,66 @@ def fetch(uri: str, say: Callable[[str], None] | None = None) -> str:
         os.replace(partial, final)
     (target / ".complete").write_text(uri)
     return str(final)
+
+
+# --- shards and their results ------------------------------------------------------------------
+
+_outputs: Uploader | None = None
+_outputs_lock = threading.Lock()
+
+
+def shard_info() -> tuple[int, int]:
+    """(this machine's shard, how many shards), from the job; (0, 1) when the job is not split."""
+    try:
+        count = max(1, int(_config.env("AIRON_SHARDS") or 1))
+        index = int(_config.env("AIRON_SHARD") or 0)
+    except ValueError:
+        return 0, 1
+    return (index, count) if 0 <= index < count else (0, 1)
+
+
+def shard(items: Any) -> list[Any]:
+    """This machine's part of `items`: every n-th item starting at its shard number. Give the
+    items in the same order on every machine (sort file names, for example)."""
+    index, count = shard_info()
+    return list(items)[index::count]
+
+
+def output(path: str) -> bool:
+    """Store a result file or folder of this job in Airon's store, under the job's outputs, where
+    the merge stage and anyone with a key can read it; never deleted with old checkpoints. The
+    file is copied at once and uploaded in the background; the process waits for it before it
+    ends. Outside a job it does nothing and says so."""
+    global _outputs
+    client = job_client()
+    if client is None:
+        _log.warn_once("output-no-job", "airon.output() stores results only inside a job; ignored")
+        return False
+    with _outputs_lock:
+        if _outputs is None:
+            _outputs = Uploader(client, _config.env("AIRON_STAGE"))
+            atexit.register(_wait_for_outputs)
+        return _outputs.submit(path, None, None, {}, kind="output")
+
+
+def _wait_for_outputs() -> None:
+    if _outputs is not None:
+        _outputs.wait(float(_config.env("AIRON_CHECKPOINT_WAIT") or 3600))
+
+
+def outputs() -> list[dict[str, Any]]:
+    """The results every shard of this job stored with `output()`: [{uri, name, shard, bytes}].
+    Download one with `fetch(uri)`. Meant for the merge stage."""
+    _wait_for_outputs()
+    client = job_client()
+    if client is None:
+        raise RuntimeError("airon.outputs() works inside a job")
+    answer = client.request("GET", "/v1/job/outputs", timeout=60)
+    if not answer.ok:
+        raise RuntimeError(
+            f"Airon would not list the outputs: {_plain(answer.data, answer.message)}"
+        )
+    return list((answer.data or {}).get("outputs") or [])
 
 
 def resume() -> str | None:

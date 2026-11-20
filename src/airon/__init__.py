@@ -18,7 +18,11 @@ from ._run import fetch as fetch
 from ._run import finish as finish
 from ._run import init as init
 from ._run import log as log
+from ._run import output as output
+from ._run import outputs as outputs
 from ._run import resume as resume
+from ._run import shard as shard
+from ._run import shard_info as shard_info
 from ._version import __version__ as __version__
 
 if TYPE_CHECKING:

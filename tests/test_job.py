@@ -118,6 +118,7 @@ def test_stages_run_in_order_with_the_job_environment(jobs: JobServer, tmp_path:
         ("train", "running"),
         ("train", "passed"),
         ("eval", "skipped"),
+        ("merge", "skipped"),
         ("finish", "passed"),
     ]
     texts = [(line["stream"], line["text"]) for line in jobs.lines]
@@ -456,3 +457,29 @@ def test_the_github_token_is_found_under_any_of_its_names(monkeypatch: pytest.Mo
     assert _job.github_token() == "from-the-pod-secret"
     monkeypatch.setenv("GH_TOKEN", "preferred")
     assert _job.github_token() == "preferred"
+
+
+def test_a_later_shard_skips_what_shard_zero_proved(jobs: JobServer, tmp_path: Path) -> None:
+    stages = {
+        "test": "touch tested",
+        "dry": "touch dried",
+        "train": "echo shard $AIRON_SHARD of $AIRON_SHARDS",
+        "merge": "touch merged",
+    }
+    made = runner(
+        jobs,
+        tmp_path,
+        stages,
+        skip=["test", "dry", "merge"],
+        env={"AIRON_SHARD": "3", "AIRON_SHARDS": "8"},
+    )
+    assert made.run() == 0
+    assert not any((tmp_path / f).exists() for f in ("tested", "dried", "merged"))
+    reasons = {
+        stage: body.get("reason") for stage, state, body in jobs.stages if state == "skipped"
+    }
+    assert (
+        reasons["dry"] == "shard 0 proved it"
+        and reasons["merge"] == "merge runs once, after every shard"
+    )
+    assert any(line["text"] == "shard 3 of 8" for line in jobs.lines)
