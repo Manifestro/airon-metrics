@@ -167,7 +167,7 @@ with `airon.outputs()` and `airon.fetch(uri)`:
 ```python
 import airon
 
-files = airon.shard(sorted(glob.glob("data/*.wav")))   # this machine's part
+files = airon.shard(sorted(glob.glob("data/*.wav")))  # this machine's part
 with open("part.jsonl", "w") as out:
     for f in files:
         out.write(json.dumps(transcribe(f)) + "\n")
