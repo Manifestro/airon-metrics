@@ -16,6 +16,10 @@ Jobs on machines Airon rents. Needs an Airon server that can launch jobs.
   (a GitHub token from the pod secret, `GH_TOKEN`, reaches git through its environment only, and an
   SSH address becomes HTTPS), and runs the stages like `airon run`.
 - `examples/job`: a job that exercises every stage.
+- `airon status JOB --watch`: one line per change (a stage starting, passing or failing, a waiting
+  job getting its machine) and an exit code when the job is over: 0 done, 1 failed, 130 stopped.
+  Made to run in the background or under a monitor.
+- `airon status` shows what a waiting job waits for, and the `ssh` command while its machine is up.
 
 ## [0.2.0] - 2026-11-20
 

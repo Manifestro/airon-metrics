@@ -462,29 +462,83 @@ def cmd_agent(_: argparse.Namespace) -> int:
     return _job.agent()
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    pair = _connection_client()
-    if pair is None:
-        return EXIT_USAGE
-    client, _ = pair
-    result = client.request("GET", f"/v1/jobs/{args.job}/status")
-    if not result.ok:
-        print(f"airon: {_job._plain(result)}", file=sys.stderr)
-        return EXIT_FAILED
-    job = result.data or {}
+_JOB_OVER = {"done": EXIT_OK, "failed": EXIT_FAILED, "killed": 130}
+
+
+def _print_job(job: dict[str, Any]) -> None:
     print(f"{job['job']}  {job['status']}  ({job['mode']}, commit {job.get('commit') or '-'})")
+    if job.get("waiting_for"):
+        print(f"  waiting: {job['waiting_for']}")
     for attempt in job.get("attempts") or []:
         dirty = " dirty" if attempt.get("dirty") else ""
-        print(
-            f"  attempt {attempt['attempt']}: {attempt['status']}{dirty} on {attempt.get('host') or '-'}"
-        )
+        where = attempt.get("host") or "-"
+        print(f"  attempt {attempt['attempt']}: {attempt['status']}{dirty} on {where}")
         for stage in attempt.get("stages") or []:
             why = f"  {stage['reason']}" if stage.get("reason") else ""
             print(f"    {stage['name']:<7} {stage['state']}{why}")
         error = attempt.get("error")
         if error and attempt["status"] != "running":
             print(f"  cause: {error.get('message')}")
-    return EXIT_OK
+        machine = attempt.get("machine") or {}
+        if machine.get("up") and machine.get("ssh"):
+            print(f"  ssh (for emergencies): {machine['ssh']}")
+    if job.get("held_until"):
+        print(
+            f"  the machine is kept for a look until {job['held_until']}; `airon stop` ends it now"
+        )
+
+
+def _events(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
+    """What changed between two looks at a job, one line each."""
+    lines = []
+    if before is None or before["status"] != after["status"]:
+        extra = f": {after['waiting_for']}" if after.get("waiting_for") else ""
+        lines.append(f"job {after['status']}{extra}")
+    seen = {
+        (a["attempt"], s["name"]): s["state"]
+        for a in (before or {}).get("attempts") or []
+        for s in a.get("stages") or []
+    }
+    for attempt in after.get("attempts") or []:
+        for stage in attempt.get("stages") or []:
+            if seen.get((attempt["attempt"], stage["name"])) != stage["state"]:
+                why = f": {stage['reason']}" if stage.get("reason") else ""
+                lines.append(f"{stage['name']} {stage['state']}{why}")
+    return lines
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    pair = _connection_client()
+    if pair is None:
+        return EXIT_USAGE
+    client, _ = pair
+    path = f"/v1/jobs/{args.job}/status"
+    result = client.request("GET", path)
+    if not result.ok:
+        print(f"airon: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    job = result.data or {}
+    if not args.watch:
+        _print_job(job)
+        return EXIT_OK
+    # One line per change, then the whole picture and an exit code an agent can act on: made to be
+    # run in the background or under a monitor.
+    before: dict[str, Any] | None = None
+    while True:
+        for line in _events(before, job):
+            print(f"{time.strftime('%H:%M:%S')}  {job['job']}  {line}", flush=True)
+        if job["status"] in _JOB_OVER or job["status"] == "held":
+            print()
+            _print_job(job)
+            return _JOB_OVER.get(job["status"], EXIT_FAILED)
+        before = job
+        time.sleep(args.every)
+        result = client.request("GET", path)
+        if result.ok:
+            job = result.data or job
+        elif result.status in (401, 403, 404):
+            print(f"airon: {_job._plain(result)}", file=sys.stderr)
+            return EXIT_FAILED
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -547,6 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_agent)
     status = commands.add_parser("status", help="show a job: DY-40 (its latest) or DY-40/2")
     status.add_argument("job")
+    status.add_argument(
+        "--watch",
+        action="store_true",
+        help="print every change and exit when the job is over (0 done, 1 failed, 130 stopped)",
+    )
+    status.add_argument("--every", type=float, default=10.0, help=argparse.SUPPRESS)
     status.set_defaults(func=cmd_status)
     stop = commands.add_parser("stop", help="stop a job")
     stop.add_argument("job")

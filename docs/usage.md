@@ -150,9 +150,13 @@ can look:
 
 ```bash
 git push
-airon launch            # billable from here
-airon status DY-40
+airon launch                  # billable from here
+airon status DY-40 --watch    # a line per change; exits 0 done, 1 failed, 130 stopped
 ```
+
+When AWS has no machine of the type right now, the job waits (`queued`) and starts by itself once
+one is free, for up to `resources.wait` (default 6h). While a machine is up, `airon status` also
+prints its `ssh` command, for emergencies.
 
 Inside a job, `airon.init()` needs no arguments: it attaches to the job's run. Continue from a
 checkpoint when Airon asks for it:

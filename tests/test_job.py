@@ -34,8 +34,9 @@ class JobServer:
                 pass
 
             def do_GET(self) -> None:  # noqa: N802
-                raw = json.dumps(server.job).encode()
-                self.send_response(200 if server.job else 404)
+                job = server.job  # read once: a test may hand out a new view per request
+                raw = json.dumps(job).encode()
+                self.send_response(200 if job else 404)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -285,3 +286,52 @@ def test_agent_fetches_its_job_and_runs_it(
     assert (tmp_path / "home" / "work" / "XP-01-3" / "marker.txt").exists()
     assert ("finish", "passed") in jobs.states()
     assert any(line["text"] == "XP-01/3" for line in jobs.lines)
+
+
+def test_status_watch_prints_changes_and_exits_with_the_result(
+    jobs: JobServer, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from airon import cli
+
+    def view(status: str, stages: list[tuple[str, str]], **extra: Any) -> dict[str, Any]:
+        return {
+            "job": "XP-01/2",
+            "mode": "aws",
+            "status": status,
+            "commit": "abc",
+            "attempts": [
+                {
+                    "attempt": 1,
+                    "status": "failed" if status == "held" else "running",
+                    "host": "i-1",
+                    "stages": [{"name": n, "state": s} for n, s in stages],
+                    "error": {"message": "stage train failed; exit code 137"},
+                    "machine": {"up": True, "ssh": "ssh ubuntu@203.0.113.7"},
+                }
+            ],
+            **extra,
+        }
+
+    looks = [
+        view("queued", [], waiting_for="no g5.xlarge machine right now"),
+        view("running", [("clone", "passed"), ("train", "running")]),
+        view(
+            "held",
+            [("clone", "passed"), ("train", "failed")],
+            held_until="2026-11-20T10:00:00+00:00",
+        ),
+    ]
+
+    calls = iter(looks)
+    monkeypatch.setattr(
+        JobServer, "job", property(lambda self: next(calls, looks[-1])), raising=False
+    )
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "key")
+    code = cli.main(["status", "XP-01/2", "--watch", "--every", "0.01"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "job queued: no g5.xlarge machine right now" in out
+    assert "train running" in out and "train failed" in out
+    assert "ssh (for emergencies): ssh ubuntu@203.0.113.7" in out
+    assert "kept for a look until" in out
