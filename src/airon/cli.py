@@ -541,6 +541,33 @@ def cmd_agent(_: argparse.Namespace) -> int:
 _JOB_OVER = {"done": EXIT_OK, "failed": EXIT_FAILED, "killed": 130}
 
 
+def _span(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 90:
+        return f"{seconds} s"
+    if seconds < 90 * 60:
+        return f"{round(seconds / 60)} min"
+    return f"{seconds / 3600:.1f} h"
+
+
+def _bar(bar: dict[str, Any]) -> str:
+    """ "transcribe 1,200/3,000 files (40%), 10.3 files/s, about 3 min left"."""
+    unit = bar.get("unit") or "it"
+    text = f"{bar['name']} {bar['done']:,.0f}"
+    if bar.get("total"):
+        text += f"/{bar['total']:,.0f} {unit} ({bar['done'] / bar['total']:.0%})"
+    else:
+        text += f" {unit}"
+    rate = bar.get("rate")
+    if rate:
+        text += f", {rate:.3g} {unit}/s" if rate >= 1 else f", {1 / rate:.3g} s/{unit}"
+    if bar.get("eta_seconds") is not None:
+        text += f", about {_span(bar['eta_seconds'])} left"
+    if bar.get("stuck"):
+        text += f", NOT MOVED for {_span(bar.get('quiet_seconds') or 0)}"
+    return text
+
+
 def _print_job(job: dict[str, Any]) -> None:
     print(f"{job['job']}  {job['status']}  ({job['mode']}, commit {job.get('commit') or '-'})")
     if job.get("waiting_for"):
@@ -552,6 +579,8 @@ def _print_job(job: dict[str, Any]) -> None:
         for stage in attempt.get("stages") or []:
             why = f"  {stage['reason']}" if stage.get("reason") else ""
             print(f"    {stage['name']:<7} {stage['state']}{why}")
+            for bar in stage.get("progress") or []:
+                print(f"            {_bar(bar)}")
         error = attempt.get("error")
         if error and attempt["status"] != "running":
             print(f"  cause: {error.get('message')}")
@@ -583,11 +612,20 @@ def _events(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
         for a in (before or {}).get("attempts") or []
         for s in a.get("stages") or []
     }
+    marks = {
+        (a["attempt"], s["name"], b["name"]): _mark(b)
+        for a in (before or {}).get("attempts") or []
+        for s in a.get("stages") or []
+        for b in s.get("progress") or []
+    }
     for attempt in after.get("attempts") or []:
         for stage in attempt.get("stages") or []:
             if seen.get((attempt["attempt"], stage["name"])) != stage["state"]:
                 why = f": {stage['reason']}" if stage.get("reason") else ""
                 lines.append(f"{stage['name']} {stage['state']}{why}")
+            for bar in stage.get("progress") or []:
+                if marks.get((attempt["attempt"], stage["name"], bar["name"])) != _mark(bar):
+                    lines.append(f"{stage['name']}: {_bar(bar)}")
     shards_before = {
         s["job"]: (s["status"], s.get("stage")) for s in (before or {}).get("shards") or []
     }
@@ -600,6 +638,12 @@ def _events(before: dict[str, Any] | None, after: dict[str, Any]) -> list[str]:
             )
             lines.append(f"{shard['job']} {shard['status']}{at}{why}")
     return lines
+
+
+def _mark(bar: dict[str, Any]) -> tuple[Any, ...]:
+    """A bar is worth a line under --watch at every tenth of the way, and when it gets stuck."""
+    share = bar.get("share")
+    return (int(share * 10) if share is not None else None, bool(bar.get("stuck")))
 
 
 def cmd_status(args: argparse.Namespace) -> int:

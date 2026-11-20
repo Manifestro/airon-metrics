@@ -12,6 +12,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from . import _run
+from ._progress import metric as metric
+from ._progress import progress as progress
+from ._progress import track as track
 from ._run import NoopRun as NoopRun
 from ._run import Run as Run
 from ._run import fetch as fetch

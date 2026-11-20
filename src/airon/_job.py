@@ -29,6 +29,8 @@ STAGES = ("clone", "setup", "data", "check", "test", "dry", "train", "eval", "me
 HEARTBEAT = 30.0
 LOG_FLUSH = 2.0
 LOG_BATCH = 500
+# A progress bar redrawn in place goes to Airon at most this often.
+REDRAW_EVERY = 5.0
 STOP_GRACE = 30.0
 
 Say = Callable[[str], None]
@@ -108,20 +110,38 @@ class LogShipper:
         self.last_output = time.time()
         # The last line a command wrote to stderr: usually the line that says why it failed.
         self.last_error = ""
+        # The stage the lines belong to, so Airon files a progress bar under the right one.
+        self.stage: str | None = None
+        self._redrawn: dict[str, float] = {}
 
     def start(self) -> None:
         self._thread.start()
 
-    def add(self, stream: str, text: str) -> None:
+    def add(self, stream: str, text: str, redraw: bool = False) -> None:
         self.last_output = time.time()
-        if stream == "stderr" and text.strip():
+        if stream == "stderr" and text.strip() and not redraw and not text.startswith("::airon "):
             self.last_error = text.strip()[:500]
+        line: dict[str, Any] = {"t": self.last_output, "stream": stream, "text": text}
+        if self.stage:
+            line["stage"] = self.stage
+        if redraw:
+            line["redraw"] = True
         with self._lock:
-            self._lines.append({"t": self.last_output, "stream": stream, "text": text})
+            self._lines.append(line)
             if len(self._lines) > 20_000:  # the server keeps the tail anyway
                 del self._lines[:5_000]
             if len(self._lines) >= LOG_BATCH:
                 self._wake.set()
+
+    def redraw(self, stream: str, text: str) -> None:
+        """A progress bar drawn again in place (a carriage return, no new line): Airon reads it
+        for progress but does not keep it as a line. At most one every few seconds per stream."""
+        now = time.time()
+        self.last_output = now
+        if not text.strip() or now - self._redrawn.get(stream, 0.0) < REDRAW_EVERY:
+            return
+        self._redrawn[stream] = now
+        self.add(stream, text, redraw=True)
 
     def flush(self) -> None:
         while True:
@@ -167,6 +187,13 @@ def _pump(source: IO[bytes], sink: IO[bytes], stream: str, ship: LogShipper) -> 
         *lines, pending = pending.split(b"\n")
         for line in lines:
             ship.add(stream, line.rsplit(b"\r", 1)[-1].decode("utf-8", "replace").rstrip())
+        if b"\r" in pending:
+            # A bar redrawn in place: send its latest state now, not when the line ends, and
+            # keep only that, however long the bar runs.
+            drawn = [part for part in pending.split(b"\r") if part.strip()]
+            if drawn:
+                ship.redraw(stream, drawn[-1].decode("utf-8", "replace").rstrip())
+            pending = pending.rsplit(b"\r", 1)[-1]
     if pending.strip():
         ship.add(stream, pending.rsplit(b"\r", 1)[-1].decode("utf-8", "replace").rstrip())
 
@@ -306,6 +333,8 @@ class Runner:
         # The runner announces every stage; the SDK's own "tracking run" lines would repeat it.
         # Its warnings still show.
         env.setdefault("AIRON_QUIET", "1")
+        # Python's prints reach the log (and progress lines reach Airon) as they happen.
+        env.setdefault("PYTHONUNBUFFERED", "1")
         env.update(extra or {})
         return env
 
@@ -330,6 +359,7 @@ class Runner:
         )
         self.child = child
         self.ship.last_error = ""
+        self.ship.stage = stage
         assert child.stdout is not None and child.stderr is not None
         pumps = [
             threading.Thread(

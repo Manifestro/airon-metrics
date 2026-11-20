@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.2] - 2026-11-20
+
+Progress of every stage, not only training. Needs an Airon server that reads it.
+
+### Added
+
+- `airon.track(items, name, unit=...)`, `airon.progress(name, done, total)` and
+  `airon.metric(**values)`: progress and any numbers in any stage of a job (data preparation, a
+  run through a model, tests), shown on the run as `<stage>/<name>`.
+- `airon status` shows each stage's bars (done, speed, time left); `--watch` prints a line at
+  every tenth of the way and when a bar stops moving.
+
+### Changed
+
+- `airon agent` sends a progress bar redrawn in place (tqdm) every 5 seconds while it runs, not
+  only when its line ends, and tags every line with its stage. Python output is unbuffered, so
+  prints arrive as they happen.
+
 ## [0.5.1] - 2026-11-20
 
 ### Fixed

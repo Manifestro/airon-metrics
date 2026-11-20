@@ -52,6 +52,14 @@ TEMPLATE = """\
 #             run.checkpoint(save(step), step=step)   # a file or folder: copied, then uploaded to
 #                                                     # Airon's store in the background
 #
+# SEEING WHAT EVERY STAGE DOES (data, test, a run of audio through a model, anything)
+#   A tqdm bar needs nothing: Airon reads it from the log and shows how many are done, the speed,
+#   the time left, and that a bar has stopped moving. Without tqdm:
+#       for path in airon.track(files, "transcribe", unit="files"): ...
+#       airon.metric(wer=0.142)          # any number in any stage; shown as <stage>/wer
+#   or from bash: echo "::airon progress name=resample done=400 total=3000 unit=files"
+#   `airon status DY-40 --watch` prints a line at every tenth of the way.
+#
 # SPLITTING THE WORK OVER SEVERAL MACHINES (resources.shards: 8)
 #   Shard 0 starts alone; once its dry run has passed, shards 1-7 start and skip test and dry.
 #   Each machine gets AIRON_SHARD (0-7) and AIRON_SHARDS (8); the script takes its part with
