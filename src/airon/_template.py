@@ -104,6 +104,11 @@ datasets: []                       # names from Airon's dataset catalogue that t
 estimate: {{steps: 10000}}           # steps of the full train: the dry run's speed turns it into
                                    # time and cost, and Airon refuses a run that cannot fit in ttl
 
+metrics: {{primary: eval/loss, goal: min}}   # REQUIRED: the eval/ metric this experiment is
+                                   # judged by (eval/wer, eval/sisdr...) and whether lower (min)
+                                   # or higher (max) is better. The dry run must log it, with
+                                   # train/loss and train/lr: run the evaluation on a small slice
+
 checkpoint: {{every: 30m}}           # save at least this often (run.checkpoint): each one goes to
                                    # Airon's store, where any machine can read it; a dead machine
                                    # loses no more than this. `from: DY-40` (or DY-40/2, or an

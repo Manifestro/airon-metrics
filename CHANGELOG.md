@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.3] - 2026-11-21
+
+### Added
+
+- `run.log` warns once for every metric name that is not standard: `<section>/<name>` in lower
+  case, sections train, eval, test, data, speed, sys (validation is eval/, not val/).
+- `airon init` writes the required `metrics: {primary: eval/..., goal: min|max}` block.
+
 ## [0.5.2] - 2026-11-20
 
 Progress of every stage, not only training. Needs an Airon server that reads it.

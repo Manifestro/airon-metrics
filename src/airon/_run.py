@@ -134,6 +134,7 @@ class Run:
             return
         try:
             clean = _values.metrics(metrics, _log.warn_once)
+            _values.check_names(clean, _log.warn_once)
             wall, tick = time.time(), time.monotonic()
             with self._lock:
                 explicit = _as_int(step)

@@ -60,6 +60,22 @@ def metrics(raw: Any, warn: Callable[[str, str], None]) -> dict[str, int | float
     return out
 
 
+def check_names(metrics: dict[str, Any], warn: Callable[[str, str], None]) -> None:
+    """One warning per name that is not standard (see the agents' guide)."""
+    for name in metrics:
+        if not STANDARD_NAME.match(name):
+            warn(
+                f"metric-name:{name}",
+                f"metric {name!r} is not a standard name: use <section>/<name> in lower case, "
+                f"with a section among {', '.join(SECTIONS)} (validation is eval/, not val/). "
+                "See the agents' guide.",
+            )
+
+
+SECTIONS = ("train", "eval", "test", "data", "speed", "sys")
+STANDARD_NAME = re.compile(r"^(?:" + "|".join(SECTIONS) + r")/[a-z0-9_]+(?:/[a-z0-9_]+)*$")
+
+
 def _collect(
     raw: dict[Any, Any],
     prefix: str,

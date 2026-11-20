@@ -78,3 +78,13 @@ def test_track_and_metric_print_lines_inside_a_job(
     assert out[-3] == "::airon progress name=transcribe done=3 unit=files total=3"
     assert out[-2] == "::airon metric wer=0.142"
     assert out[-1] == "::airon metric step=3 loss=1.5"
+
+
+def test_a_non_standard_metric_name_is_warned_about_once() -> None:
+    from airon import _values
+
+    said: list[tuple[str, str]] = []
+    _values.check_names(
+        {"train/loss": 1.0, "val_loss": 2.0, "eval/wer": 0.3}, lambda k, m: said.append((k, m))
+    )
+    assert [k for k, _ in said] == ["metric-name:val_loss"] and "eval/" in said[0][1]
