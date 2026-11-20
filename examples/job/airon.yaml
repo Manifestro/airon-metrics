@@ -1,6 +1,6 @@
 # A job that exercises every stage on a small GPU machine. Launch it for a running experiment:
 #   airon launch examples/job/airon.yaml --experiment XX-01
-resources: {gpu: g5.xlarge, disk: 60, ttl: 1h}
+resources: {gpu: g5.xlarge, ttl: 1h}   # disk defaults to 100 GB; the image alone takes 75
 stages:
   setup: python3 -m venv .venv && .venv/bin/pip install -q airon
   test: .venv/bin/python -c "import airon; print('airon', airon.__version__)"
