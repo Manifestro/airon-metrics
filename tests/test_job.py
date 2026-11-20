@@ -483,3 +483,40 @@ def test_a_later_shard_skips_what_shard_zero_proved(jobs: JobServer, tmp_path: P
         and reasons["merge"] == "merge runs once, after every shard"
     )
     assert any(line["text"] == "shard 3 of 8" for line in jobs.lines)
+
+
+def test_agent_keeps_asking_when_its_key_is_not_known_yet(
+    jobs: JobServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A machine can boot before Airon has committed its job; the key is unknown for a moment."""
+    commit = git_repo(tmp_path / "origin")
+    ready = {
+        "job": "XP-01/7",
+        "attempt": 1,
+        "status": "starting",
+        "run_id": "00000000-0000-0000-0000-000000000007",
+        "project": "lab",
+        "experiment": "XP-01",
+        "repository_url": str(tmp_path / "origin"),
+        "commit": commit,
+        "spec": {"stages": {"train": "true"}},
+    }
+    looks = iter([{}, {}, ready])  # 401, 401, then the job
+    monkeypatch.setattr(JobServer, "job", property(lambda self: next(looks, ready)), raising=False)
+    monkeypatch.setattr(_job.time, "sleep", lambda _: None)
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "job-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert _job.agent(say=lambda _: None, beat=0.1) == 0
+    assert ("finish", "passed") in jobs.states()
+
+
+def test_agent_gives_up_on_a_key_that_never_works(
+    jobs: JobServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_job, "START_WAIT", 0)
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "job-key")
+    said: list[str] = []
+    assert _job.agent(say=said.append) == 1
+    assert "cannot fetch the job" in said[-1]

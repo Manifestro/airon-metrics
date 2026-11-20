@@ -581,6 +581,10 @@ def git_access(url: str, token: str | None) -> tuple[str, dict[str, str]]:
     }
 
 
+# How long a fresh machine keeps asking for its job before it gives up.
+START_WAIT = 10 * 60
+
+
 def agent(say: Say = _say, poll: float = 15.0, beat: float = HEARTBEAT) -> int:
     """`airon agent`: on a machine Airon rented, fetch this machine's job and run it. The job key
     and the server's address come from the environment the launch set up."""
@@ -593,11 +597,19 @@ def agent(say: Say = _say, poll: float = 15.0, beat: float = HEARTBEAT) -> int:
     assert connection.url and connection.api_key
     client = Client(connection.url, connection.api_key, timeout=30.0)
     result = Result("retry")
-    for attempt in range(10):  # the network may come up a little after the service
+    # Keep asking for a while, whatever the answer: the network may come up a little after the
+    # service, and a machine can boot before Airon has finished recording its job, so even "this
+    # key is unknown" may change in a minute. Giving up at once leaves a paid machine idle.
+    deadline = time.monotonic() + START_WAIT
+    attempt = 0
+    while True:
         result = client.request("GET", "/v1/job", timeout=30)
-        if result.ok or result.status in (401, 403):
+        if result.ok or time.monotonic() >= deadline:
             break
+        if attempt == 3:
+            say(f"airon agent: no job yet ({_plain(result)}); asking again until it comes")
         time.sleep(min(30, 2**attempt))
+        attempt += 1
     if not result.ok:
         say(f"airon agent: cannot fetch the job: {_plain(result)}")
         return 1

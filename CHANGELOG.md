@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.5.1] - 2026-11-20
+
+### Fixed
+
+- `airon agent` keeps asking for its job for up to 10 minutes after the machine boots, whatever
+  the answer, instead of exiting on the first "unknown key". A machine that booted before Airon
+  had recorded its job sat idle and paid for.
+
 ## [0.5.0] - 2026-11-20
 
 Jobs split over several machines (`resources.shards`). Needs an Airon server with shards.
