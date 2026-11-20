@@ -414,7 +414,10 @@ def cmd_launch(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     path, text = found
     client, _ = pair
-    repo = _job.repository(path.parent.resolve())
+    # The code is the checkout we are in; the file may live elsewhere (a variant of airon.yaml).
+    repo = _job.repository(Path.cwd())
+    if not repo.get("commit"):
+        repo = _job.repository(path.parent.resolve())
     if not repo.get("commit") or not repo.get("remote"):
         print("airon: launch needs a git checkout with a remote (origin).", file=sys.stderr)
         return EXIT_USAGE
@@ -493,7 +496,10 @@ def cmd_stop(args: argparse.Namespace) -> int:
     if not result.ok:
         print(f"airon: {_job._plain(result)}", file=sys.stderr)
         return EXIT_FAILED
-    print(f"{args.job}: stopping; the machine hears it within 30 seconds.")
+    if (result.data or {}).get("job_status") == "killed":
+        print(f"{args.job}: stopping; the machine hears it within 30 seconds.")
+    else:  # it was only being kept after a failure
+        print(f"{args.job}: its machine is switched off.")
     return EXIT_OK
 
 
