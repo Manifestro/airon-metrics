@@ -116,7 +116,8 @@ server is reachable when you resume; events numbered while it was not may be tre
 ## Jobs: `airon.yaml` and `airon run`
 
 Instead of starting scripts by hand, describe the work once in `airon.yaml` at the root of the
-repository and let `airon run` execute it. Every stage is reported to Airon, so a script that dies
+repository and let `airon run` execute it. `airon init` writes a starting file whose comments
+explain every part of it. Every stage is reported to Airon, so a script that dies
 before it imports `airon`, a shell command that fails, a process killed for memory or a resume that
 does not work are all visible, with the reason, without anyone watching a terminal.
 
@@ -153,6 +154,10 @@ git push
 airon launch                  # billable from here
 airon status DY-40 --watch    # a line per change; exits 0 done, 1 failed, 130 stopped
 ```
+
+When a stage fails, the machine is kept for a while (`on_fail.hold`) with everything it set up.
+Fix the code, push, and `airon retry DY-40`: the same machine fetches the commit and goes on from
+the failed stage. Once the machine is gone, `airon retry` rents a new one.
 
 When AWS has no machine of the type right now, the job waits (`queued`) and starts by itself once
 one is free, for up to `resources.wait` (default 6h). While a machine is up, `airon status` also

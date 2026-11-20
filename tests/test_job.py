@@ -36,7 +36,7 @@ class JobServer:
             def do_GET(self) -> None:  # noqa: N802
                 job = server.job  # read once: a test may hand out a new view per request
                 raw = json.dumps(job).encode()
-                self.send_response(200 if job else 404)
+                self.send_response(200 if job else 401)  # no job: the key was revoked
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -335,3 +335,114 @@ def test_status_watch_prints_changes_and_exits_with_the_result(
     assert "train running" in out and "train failed" in out
     assert "ssh (for emergencies): ssh ubuntu@203.0.113.7" in out
     assert "kept for a look until" in out
+
+
+def test_agent_waits_on_a_failure_and_goes_on_with_a_retry(
+    jobs: JobServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    origin = tmp_path / "origin"
+    first = git_repo(origin)
+    (origin / "fixed.txt").write_text("the fix")
+    subprocess.run(["git", "add", "-A"], cwd=origin, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fix"],
+        cwd=origin,
+        check=True,
+    )
+    fixed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=origin, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    def job(attempt: int, commit: str, status: str, **extra: Any) -> dict[str, Any]:
+        return {
+            "job": "XP-01/4",
+            "attempt": attempt,
+            "status": status,
+            "run_id": f"00000000-0000-0000-0000-00000000000{attempt}",
+            "project": "lab",
+            "experiment": "XP-01",
+            "repository_url": str(origin),
+            "commit": commit,
+            "spec": {
+                "stages": {
+                    # Made by setup in attempt 1; a retry must find it still there.
+                    "setup": "touch .venv-made",
+                    "train": "test -f fixed.txt && test -f .venv-made",
+                }
+            },
+            **extra,
+        }
+
+    looks = iter(
+        [
+            job(1, first, "running"),  # the agent fetches its job
+            job(1, first, "held"),  # train failed: nothing yet
+            job(2, fixed, "starting", from_stage="train"),  # someone retried with the fix
+            {},  # after the job is done, the key is gone
+        ]
+    )
+    monkeypatch.setattr(JobServer, "job", property(lambda self: next(looks, {})), raising=False)
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "job-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    said: list[str] = []
+    assert _job.agent(say=said.append, poll=0.05, beat=0.1) == 0
+    assert any("retried as attempt 2" in line for line in said)
+    states = jobs.states()
+    assert ("train", "failed") in states and states[-1] == ("finish", "passed")
+    # The retry updated the checkout in place and did not run setup again.
+    assert [s for s in states if s[0] == "setup"] == [
+        ("setup", "running"),
+        ("setup", "passed"),
+        ("setup", "skipped"),
+    ]
+
+
+def test_agent_stops_waiting_when_the_machine_is_switched_off(
+    jobs: JobServer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commit = git_repo(tmp_path / "origin")
+    looks = iter(
+        [
+            {
+                "job": "XP-01/5",
+                "attempt": 1,
+                "status": "running",
+                "run_id": "00000000-0000-0000-0000-000000000005",
+                "project": "lab",
+                "experiment": "XP-01",
+                "repository_url": str(tmp_path / "origin"),
+                "commit": commit,
+                "spec": {"stages": {"train": "exit 3"}},
+            }
+        ]
+    )
+    monkeypatch.setattr(JobServer, "job", property(lambda self: next(looks, {})), raising=False)
+    monkeypatch.setenv("AIRON_URL", jobs.url)
+    monkeypatch.setenv("AIRON_API_KEY", "job-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert _job.agent(say=lambda _: None, poll=0.05, beat=0.1) == 1
+
+
+def test_init_writes_a_template_that_explains_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from airon import cli
+
+    (tmp_path / "uv.lock").write_text("")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "train.py").write_text("")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["init", "--experiment", "DY-40"]) == 0
+    text = (tmp_path / "airon.yaml").read_text()
+    assert "experiment: DY-40" in text
+    assert "setup: pip install -q uv && uv sync --frozen" in text
+    assert "train: uv run python scripts/train.py" in text
+    assert "dry: uv run python scripts/train.py --max-steps 50" in text
+    for lesson in ("FEWER STEPS", "airon.resume()", "airon retry", "Never put secrets"):
+        assert lesson in text
+    assert cli.main(["init"]) == 2  # never overwrites by surprise
+    assert cli.main(["init", "--force"]) == 0
+    assert "experiment: CHANGE-ME" in (tmp_path / "airon.yaml").read_text()

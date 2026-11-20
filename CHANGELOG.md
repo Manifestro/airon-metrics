@@ -20,6 +20,13 @@ Jobs on machines Airon rents. Needs an Airon server that can launch jobs.
   job getting its machine) and an exit code when the job is over: 0 done, 1 failed, 130 stopped.
   Made to run in the background or under a monitor.
 - `airon status` shows what a waiting job waits for, and the `ssh` command while its machine is up.
+- `airon retry JOB [--from STAGE] [--commit C | --same-commit] [--file airon.yaml]`: run a failed
+  or stopped job again from the failed stage, with the pushed commit of this checkout. While the
+  failed job's machine is kept, the same machine goes on: its agent waits there after a failure,
+  fetches the new commit into the same folder (the virtualenv and data stay) and continues.
+- `airon init [--experiment DY-40]`: writes a starting `airon.yaml` whose comments explain the
+  stages, the dry run, checkpoints and `airon.resume()`, and how to launch, follow, retry and stop;
+  the setup command and the training script are guessed from the repository.
 
 ## [0.2.0] - 2026-11-20
 

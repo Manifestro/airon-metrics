@@ -376,7 +376,9 @@ class Runner:
             if self.stopping.is_set():
                 self.report(stage, "killed", reason="stopped before this stage")
                 return 130
-            if index < start:
+            # On a retry the code must be the new commit even when an earlier stage is the start.
+            update = stage == "clone" and self.source and (self.root / ".git").exists()
+            if index < start and not update:
                 if stage in commands or stage in ("clone", "check"):
                     self.report(stage, "skipped", reason=f"started from {from_stage}")
                 continue
@@ -441,15 +443,24 @@ class Runner:
             return False
         url, extra = git_access(url, os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
         self.root.parent.mkdir(parents=True, exist_ok=True)
-        if self.root.exists():
-            shutil.rmtree(self.root)
-        command = (
-            f"git clone --quiet --no-checkout {_q(url)} {_q(str(self.root))} && "
-            f"git -C {_q(str(self.root))} checkout --quiet --detach {_q(commit)}"
-        )
-        code = self.execute(
-            "clone", command, extra, cwd=self.root.parent, shown=f"git clone {url} @ {commit}"
-        )
+        here = _q(str(self.root))
+        if (self.root / ".git").exists():
+            # A retry on the same machine: bring the checkout to the new commit and keep what the
+            # earlier attempt left (virtualenv, downloaded data), so nothing is set up again.
+            command = (
+                f"git -C {here} fetch --quiet {_q(url)} '+refs/heads/*:refs/remotes/origin/*' && "
+                f"git -C {here} checkout --quiet --detach {_q(commit)}"
+            )
+            shown = f"git fetch {url} @ {commit}"
+        else:
+            if self.root.exists():
+                shutil.rmtree(self.root)
+            command = (
+                f"git clone --quiet --no-checkout {_q(url)} {here} && "
+                f"git -C {here} checkout --quiet --detach {_q(commit)}"
+            )
+            shown = f"git clone {url} @ {commit}"
+        code = self.execute("clone", command, extra, cwd=self.root.parent, shown=shown)
         if code != 0:
             hint = (
                 "; is the commit pushed, and may GH_TOKEN in the pod secret read the repository?"
@@ -542,7 +553,7 @@ def git_access(url: str, token: str | None) -> tuple[str, dict[str, str]]:
     }
 
 
-def agent(say: Say = _say) -> int:
+def agent(say: Say = _say, poll: float = 15.0, beat: float = HEARTBEAT) -> int:
     """`airon agent`: on a machine Airon rented, fetch this machine's job and run it. The job key
     and the server's address come from the environment the launch set up."""
     from . import _config
@@ -563,13 +574,46 @@ def agent(say: Say = _say) -> int:
         say(f"airon agent: cannot fetch the job: {_plain(result)}")
         return 1
     job = dict(result.data or {})
-    job["token"] = connection.api_key
     label = re.sub(r"[^A-Za-z0-9._-]+", "-", str(job.get("job") or "job"))
     root = Path.home() / "work" / label
-    say(f"airon agent: running {job.get('job')} in {root}")
-    source = {"url": str(job.get("repository_url") or ""), "commit": str(job.get("commit") or "")}
-    runner = Runner(client, job, root, connection.url, say=say, source=source)
-    return runner.run(job.get("from_stage"))
+    while True:
+        job["token"] = connection.api_key
+        say(f"airon agent: running {job.get('job')} attempt {job.get('attempt')} in {root}")
+        source = {
+            "url": str(job.get("repository_url") or ""),
+            "commit": str(job.get("commit") or ""),
+        }
+        runner = Runner(client, job, root, connection.url, say=say, source=source, heartbeat=beat)
+        code = runner.run(job.get("from_stage"))
+        if code == 0 or runner.stopping.is_set():
+            return code
+        say(
+            "airon agent: the job failed; this machine waits here for a retry until it is "
+            "switched off"
+        )
+        retried = _wait_for_retry(client, job.get("attempt"), poll, say)
+        if retried is None:
+            return code
+        job = retried
+
+
+def _wait_for_retry(client: Client, attempt: Any, poll: float, say: Say) -> dict[str, Any] | None:
+    """While the job is held after a failure, ask Airon now and then whether someone retried it.
+    Returns the new attempt's job, or None once the job is over or the key is gone (the machine is
+    being switched off)."""
+    while True:
+        time.sleep(poll)
+        result = client.request("GET", "/v1/job", timeout=30)
+        if result.status in (401, 403):
+            return None
+        if not result.ok:
+            continue
+        job = dict(result.data or {})
+        if job.get("status") in ("done", "failed", "killed"):
+            return None
+        if job.get("attempt") != attempt and job.get("status") in ("starting", "running"):
+            say(f"airon agent: retried as attempt {job.get('attempt')}")
+            return job
 
 
 def _exit_reason(code: int) -> str:

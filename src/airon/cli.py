@@ -458,6 +458,68 @@ def cmd_launch(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    from . import _template
+
+    root = _job.repository(Path.cwd())["root"]
+    target = root / "airon.yaml"
+    if target.exists() and not args.force:
+        print(f"{target} already exists; pass --force to replace it.", file=sys.stderr)
+        return EXIT_USAGE
+    target.write_text(_template.render(root, args.experiment), encoding="utf-8")
+    print(f"Wrote {target}. Read its comments, fix the lines marked CHECK, then:")
+    print("  airon check    # free: the server validates the file")
+    print("  git push && airon launch")
+    return EXIT_OK
+
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    pair = _connection_client(timeout=120.0)
+    if pair is None:
+        return EXIT_USAGE
+    client, _ = pair
+    body: dict[str, Any] = {"from_stage": args.from_stage}
+    repo = _job.repository(Path.cwd())
+    if args.commit:
+        body["commit"] = args.commit
+    elif repo.get("commit") and not args.same_commit:
+        # The fix is the checkout we are in: it must be pushed for the machine to fetch it.
+        if not _pushed(repo["root"]):
+            print(
+                f"airon: commit {repo['commit'][:12]} is not on any remote branch; push it first "
+                "(or pass --same-commit to retry the code as it was).",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
+        if repo.get("dirty"):
+            print("airon: note: uncommitted changes stay here; the machine runs the commit.")
+        body["commit"] = repo["commit"]
+    if args.file:
+        found = _read_job_file(args)
+        if found is None:
+            return EXIT_USAGE
+        body["yaml"] = found[1]
+    result = client.request("POST", f"/v1/jobs/{args.job}/retry", body)
+    if not result.ok:
+        print(f"airon: cannot retry: {_job._plain(result)}", file=sys.stderr)
+        return EXIT_FAILED
+    job = result.data or {}
+    machine = job.get("machine") or {}
+    where = (
+        "on the same machine"
+        if machine.get("same_machine")
+        else f"on a new machine ({job['status']})"
+    )
+    print(
+        f"airon: {job['job']} attempt {job['attempt']} from {job.get('from_stage')} "
+        f"at {str(job.get('commit'))[:12]}, {where}"
+    )
+    if job.get("waiting_for"):
+        print(f"airon: waiting: {job['waiting_for']}")
+    print(f"airon: follow it with `airon status {job['job']} --watch`.")
+    return EXIT_OK
+
+
 def cmd_agent(_: argparse.Namespace) -> int:
     return _job.agent()
 
@@ -580,6 +642,12 @@ def build_parser() -> argparse.ArgumentParser:
     sync.set_defaults(func=cmd_sync)
     commands.add_parser("version", help="print the version").set_defaults(func=cmd_version)
 
+    init = commands.add_parser(
+        "init", help="write a starting airon.yaml at the root of the repository, with explanations"
+    )
+    init.add_argument("--experiment", help="the experiment id (DY-40) it runs for")
+    init.add_argument("--force", action="store_true", help="replace an existing airon.yaml")
+    init.set_defaults(func=cmd_init)
     check = commands.add_parser("check", help="validate airon.yaml with the server, run nothing")
     check.add_argument("file", nargs="?", help="path to the file (default: airon.yaml)")
     check.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
@@ -596,6 +664,18 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("file", nargs="?", help="path to the file (default: airon.yaml)")
     launch.add_argument("--experiment", help="experiment id, if airon.yaml does not name one")
     launch.set_defaults(func=cmd_launch)
+    retry = commands.add_parser(
+        "retry",
+        help="run a failed or stopped job again from the failed stage, with the pushed commit here",
+    )
+    retry.add_argument("job")
+    retry.add_argument("--from", dest="from_stage", choices=_job.STAGES, help="start at this stage")
+    retry.add_argument("--commit", help="commit to run (default: the pushed HEAD of this checkout)")
+    retry.add_argument(
+        "--same-commit", action="store_true", help="run the code the failed attempt ran"
+    )
+    retry.add_argument("--file", help="send a changed airon.yaml along")
+    retry.set_defaults(func=cmd_retry)
     commands.add_parser(
         "agent", help="run this machine's job (started by the launch, not by people)"
     ).set_defaults(func=cmd_agent)
