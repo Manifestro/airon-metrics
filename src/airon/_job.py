@@ -673,7 +673,7 @@ def _q(text: str) -> str:
 
 
 # The names a GitHub token goes by in pod secrets, in the order they are tried.
-GITHUB_TOKEN_NAMES = ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_API")
+GITHUB_TOKEN_NAMES = ("GH_TOKEN", "GITHUB_TOKEN")
 
 
 def github_token() -> str | None:

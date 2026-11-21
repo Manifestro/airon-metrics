@@ -93,7 +93,11 @@ def normalize_url(raw: str | None) -> str | None:
         parts.port  # noqa: B018 - raises ValueError for a malformed port
     except ValueError:
         return None
-    return f"{parts.scheme}://{parts.netloc}{parts.path}".rstrip("/")
+    path = parts.path.rstrip("/")
+    # The SDK adds /v1/... itself: an address given with it would end up as /v1/v1/...
+    if path.endswith("/v1"):
+        path = path[: -len("/v1")]
+    return f"{parts.scheme}://{parts.netloc}{path}".rstrip("/")
 
 
 class Connection:

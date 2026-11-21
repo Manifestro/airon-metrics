@@ -88,3 +88,12 @@ def test_a_non_standard_metric_name_is_warned_about_once() -> None:
         {"train/loss": 1.0, "val_loss": 2.0, "eval/wer": 0.3}, lambda k, m: said.append((k, m))
     )
     assert [k for k, _ in said] == ["metric-name:val_loss"] and "eval/" in said[0][1]
+
+
+def test_an_address_given_with_v1_is_not_doubled() -> None:
+    from airon import _config
+
+    assert _config.normalize_url("https://api.example.com/v1") == "https://api.example.com"
+    assert _config.normalize_url("https://api.example.com/v1/") == "https://api.example.com"
+    assert _config.normalize_url("https://example.com/airon/v1") == "https://example.com/airon"
+    assert _config.normalize_url("https://example.com/v10") == "https://example.com/v10"

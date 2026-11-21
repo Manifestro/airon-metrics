@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.1] - 2026-11-21
+
+### Fixed
+
+- An Airon address given with `/v1` at the end (`AIRON_URL=https://host/v1`) no longer becomes
+  `/v1/v1/...`: the SDK drops it.
+- The GitHub token is read from `GH_TOKEN` (or `GITHUB_TOKEN`); the old `GITHUB_API` name is gone.
+
 ## [0.6.0] - 2026-11-21
 
 Jobs that do not train (`type: run`). Needs an Airon server that knows them; earlier servers

@@ -453,8 +453,8 @@ def test_the_github_token_is_found_under_any_of_its_names(monkeypatch: pytest.Mo
     for name in _job.GITHUB_TOKEN_NAMES:
         monkeypatch.delenv(name, raising=False)
     assert _job.github_token() is None
-    monkeypatch.setenv("GITHUB_API", "from-the-pod-secret")
-    assert _job.github_token() == "from-the-pod-secret"
+    monkeypatch.setenv("GITHUB_TOKEN", "from-the-environment")
+    assert _job.github_token() == "from-the-environment"
     monkeypatch.setenv("GH_TOKEN", "preferred")
     assert _job.github_token() == "preferred"
 
