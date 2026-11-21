@@ -471,7 +471,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if target.exists() and not args.force:
         print(f"{target} already exists; pass --force to replace it.", file=sys.stderr)
         return EXIT_USAGE
-    target.write_text(_template.render(root, args.experiment), encoding="utf-8")
+    target.write_text(_template.render(root, args.experiment, args.type), encoding="utf-8")
     print(f"Wrote {target}. Read its comments, fix the lines marked CHECK, then:")
     print("  airon check    # free: the server validates the file")
     print("  git push && airon launch")
@@ -723,6 +723,12 @@ def build_parser() -> argparse.ArgumentParser:
         "init", help="write a starting airon.yaml at the root of the repository, with explanations"
     )
     init.add_argument("--experiment", help="the experiment id (DY-40) it runs for")
+    init.add_argument(
+        "--type",
+        choices=("train", "run"),
+        default="train",
+        help="train (default), or run: a job that does not train (download, process, compare)",
+    )
     init.add_argument("--force", action="store_true", help="replace an existing airon.yaml")
     init.set_defaults(func=cmd_init)
     check = commands.add_parser("check", help="validate airon.yaml with the server, run nothing")

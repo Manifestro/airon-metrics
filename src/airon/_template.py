@@ -119,6 +119,53 @@ quiet_ok: 20m                      # no output and an idle GPU for this long cou
 """
 
 
+RUN_TEMPLATE = """\
+# airon.yaml: a job that does not train (type: run): download, process, transcribe, compare
+# models. Airon rents the machine(s), clones the pushed commit, installs the dependencies from the
+# lock file (uv.lock, requirements.txt or pyproject.toml), downloads the inputs, runs the command,
+# uploads what it wrote to $AIRON_OUTPUT and switches the machine(s) off.
+#
+#     airon check                    validate this file (free, nothing runs)
+#     git push                       the machine clones the commit, so it must be on the remote
+#     airon launch                   rent and start (billable from here)
+#     airon status DY-40 --watch     follow it; exits 0 done, 1 failed, 130 stopped
+#     airon retry DY-40 / airon stop DY-40
+#
+# WHAT THE SCRIPT GETS (environment variables)
+#   $AIRON_DATA      the dataset of `inputs.data`, already downloaded. With shards, only this
+#                    machine's part of it: use every file there, do not split it again.
+#   $AIRON_MODELS    the best checkpoint of each experiment in `inputs.models`, in a folder each
+#                    ($AIRON_MODELS/DY-40/...)
+#   $AIRON_OUTPUT    an empty folder: write the results there; every file is uploaded, with its
+#                    path, when the command ends without an error
+#   $AIRON_SHARD, $AIRON_SHARDS   this machine's number and how many there are
+#
+# PROGRESS: a tqdm bar is read by itself; otherwise
+#   for path in airon.track(files, "transcribe", unit="files"): ...
+# Never put secrets here; HF_TOKEN and GH_TOKEN come from the pod secret.
+
+experiment: {code}                 # a RUNNING experiment in Airon
+type: run
+
+gpu: g5.xlarge                     # instance type; `cloud_limits` shows what fits
+disk: 200                          # GB; the image takes 75, and the inputs are downloaded here
+ttl: 12h                           # the machine is switched off after this, whatever happens
+# shards: 20                       # split the work over 20 machines: shard 0 first (with dry),
+                                   # the rest once it passed
+
+inputs:
+  data: CHANGE-ME                  # a dataset from Airon's catalogue (list_datasets)
+  # models: [DY-40, DY-41]         # best checkpoints of these experiments
+
+dry: {python} {script} --limit 50{note}
+run: {python} {script}
+
+result:
+  dataset: CHANGE-ME               # the uploaded results become this dataset in the catalogue,
+                                   # so a later job can take them with `inputs: {{data: ...}}`
+"""
+
+
 def _setup(root: Path) -> tuple[str, str]:
     if (root / "uv.lock").exists():
         return "pip install -q uv && uv sync --frozen", ""
@@ -144,7 +191,19 @@ def _train(root: Path, setup: str) -> tuple[str, str]:
     return f"{python} train.py", "   # CHECK: no train.py found; put the real command"
 
 
-def render(root: Path, code: str | None) -> str:
+def render(root: Path, code: str | None, kind: str = "train") -> str:
+    if kind == "run":
+        python = "uv run python" if (root / "uv.lock").exists() else "python"
+        script = next(
+            (c for c in ("job.py", "run.py", "main.py", "scripts/run.py") if (root / c).exists()),
+            None,
+        )
+        return RUN_TEMPLATE.format(
+            code=code or "CHANGE-ME",
+            python=python,
+            script=script or "job.py",
+            note="" if script else "   # CHECK: no job.py found; put the real command",
+        )
     setup, setup_note = _setup(root)
     train, train_note = _train(root, setup)
     return TEMPLATE.format(

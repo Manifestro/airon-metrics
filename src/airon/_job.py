@@ -21,11 +21,25 @@ import time
 from pathlib import Path
 from typing import IO, Any, Callable
 
-from . import _log
+from . import _io, _log
 from ._system import GpuReader, HostReader
 from ._transport import Client, Result
 
-STAGES = ("clone", "setup", "data", "check", "test", "dry", "train", "eval", "merge", "finish")
+# `run` is the work of a job that does not train (airon.yaml `type: run`): download, process,
+# transcribe, compare models. A job has `train` or `run`, never both.
+STAGES = (
+    "clone",
+    "setup",
+    "data",
+    "check",
+    "test",
+    "dry",
+    "train",
+    "run",
+    "eval",
+    "merge",
+    "finish",
+)
 HEARTBEAT = 30.0
 LOG_FLUSH = 2.0
 LOG_BATCH = 500
@@ -231,6 +245,19 @@ class Runner:
         self._done = threading.Event()
         self._gpus = GpuReader()
         self._host = HostReader(str(root))
+        # Next to the checkout, so a retry on the same machine keeps them.
+        self.inputs_dir = root.parent / f"{root.name}-inputs"
+        self.output_dir = root.parent / f"{root.name}-output"
+
+    @property
+    def kind(self) -> str:
+        """train or run (airon.yaml `type`); a file without one trains."""
+        return "run" if self.spec.get("type") == "run" else "train"
+
+    def _emit(self, line: str) -> None:
+        """A line for this machine's log and for Airon (progress lines become bars)."""
+        self.say(line)
+        self.ship.add("stdout", line)
 
     # -- talking to Airon --
 
@@ -330,6 +357,16 @@ class Runner:
             }
         )
         env.pop("AIRON_RESUME", None)
+        sources = self.spec.get("sources") or {}
+        if sources.get("data"):
+            env["AIRON_DATA"] = str(self.inputs_dir / "data")
+        if sources.get("models"):
+            env["AIRON_MODELS"] = str(self.inputs_dir / "models")
+        if self.kind == "run":
+            env["AIRON_OUTPUT"] = str(self.output_dir)
+        # The checkout's environment, when Airon set it up from the lock file.
+        if stage not in ("clone", "setup") and self.source:
+            env.update(_io.venv_env(self.root))
         # The runner announces every stage; the SDK's own "tracking run" lines would repeat it.
         # Its warnings still show.
         env.setdefault("AIRON_QUIET", "1")
@@ -401,6 +438,9 @@ class Runner:
     def _stages(self, from_stage: str | None) -> int:
         start = STAGES.index(from_stage) if from_stage else 0
         commands: dict[str, str] = self.spec.get("stages") or {}
+        # A retry on a new machine has nothing yet: the code, its environment and the inputs are
+        # prepared again whatever stage it starts from; only the work itself is skipped.
+        fresh = bool(self.source) and not (self.root / ".git").exists()
         for index, stage in enumerate(STAGES):
             self.stage = stage
             if self.stopping.is_set():
@@ -408,7 +448,8 @@ class Runner:
                 return 130
             # On a retry the code must be the new commit even when an earlier stage is the start.
             update = stage == "clone" and self.source and (self.root / ".git").exists()
-            if index < start and not update:
+            prepare = fresh and stage in ("clone", "setup", "data")
+            if index < start and not update and not prepare:
                 if stage in commands or stage in ("clone", "check"):
                     self.report(stage, "skipped", reason=f"started from {from_stage}")
                 continue
@@ -425,6 +466,8 @@ class Runner:
 
     def _stage(self, stage: str, commands: dict[str, str]) -> bool | None:
         """True passed, False failed or stopped, None skipped."""
+        if (stage == "run") != (self.kind == "run") and stage in ("train", "run"):
+            return None  # a job trains or runs; the other stage is not its own, not skipped
         if stage == "clone":
             if self.source:
                 return self._clone(self.source)
@@ -438,6 +481,17 @@ class Runner:
             self.report(stage, "passed")
             return True
         command = commands.get(stage)
+        if stage == "setup" and command is None and self.source:
+            # No setup in airon.yaml: install the dependencies from the lock file, if there is one.
+            command = _io.setup_command(self.root)
+            if command is not None:
+                self.report(stage, "running", detail={"automatic": True})
+                return self._ended(stage, self.execute(stage, command))
+        if stage == "data" and (self.spec.get("sources") or {}):
+            if not self._fetched():
+                return False
+            if command is None:
+                return True  # downloading the inputs was the whole stage
         if command is None:
             self.report(stage, "skipped", reason="not in airon.yaml")
             return None
@@ -455,9 +509,42 @@ class Runner:
         inputs = (self.spec.get("inputs") or {}).get(stage) or []
         self.report(stage, "running", fingerprint=fingerprint(command, self.root, inputs))
         if stage == "dry":
+            if self.kind == "run":  # a short pass of the work; no checkpoint, no resume
+                return self._ended(stage, self.execute(stage, command))
             return self._dry(command)
+        if stage == "run":
+            return self._run(command)
         code = self.execute(stage, command, self._resume() if stage == "train" else None)
         return self._ended(stage, code)
+
+    def _fetched(self) -> bool:
+        """The inputs (`inputs: data, models`), downloaded before the data stage. False: failed."""
+        if self.spec.get("stages", {}).get("data") is None:
+            self.report("data", "running", detail={"inputs": True})
+        try:
+            got = _io.fetch_inputs(self.client, self.inputs_dir, self._emit)
+        except _io.TransferFailed as exc:
+            self.say(f"airon: data: {exc}")
+            self.report("data", "failed", reason=str(exc))
+            return False
+        if self.spec.get("stages", {}).get("data") is None:
+            self.report("data", "passed", detail={"inputs": got})
+        return True
+
+    def _run(self, command: str) -> bool:
+        """The work of a `type: run` job, then its results uploaded from $AIRON_OUTPUT."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        code = self.execute("run", command)
+        if code != 0 or self.stopping.is_set():
+            return self._ended("run", code)
+        try:
+            sent = _io.upload_outputs(self.client, self.output_dir, self._emit)
+        except _io.TransferFailed as exc:
+            return self._ended("run", 1, f"the results could not be uploaded: {exc}")
+        if self.stopping.is_set():
+            return self._ended("run", 0)
+        self.report("run", "passed", exit_code=0, detail={"outputs": sent})
+        return True
 
     def _ended(self, stage: str, code: int, reason: str | None = None) -> bool:
         if self.stopping.is_set():

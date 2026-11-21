@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [0.6.0] - 2026-11-21
+
+Jobs that do not train (`type: run`). Needs an Airon server that knows them; earlier servers
+never send such a job, so this agent runs their jobs as before.
+
+### Added
+
+- A job of `type: run` (download, process, transcribe, compare models) runs its command in a new
+  `run` stage instead of `train`: no checkpoint and no resume, and its `dry` is one short pass.
+- Inputs: before the work, the agent downloads the job's `inputs` (a dataset from the catalogue,
+  the best checkpoints of other experiments) from links Airon lists page by page, into
+  `$AIRON_DATA` and `$AIRON_MODELS`. Files already on the disk are not downloaded again.
+- Results: everything a `run` job writes to `$AIRON_OUTPUT` is uploaded when its command ends
+  without an error, each file keeping its path, several at a time.
+- Without a `setup` stage on a rented machine, the dependencies are installed from the lock file
+  (uv.lock, requirements.txt or pyproject.toml) into the checkout's `.venv`, which every later
+  stage uses.
+- `airon init --type run` writes a starting file for such a job.
+
+### Fixed
+
+- A retry on a new machine prepared nothing when it started from a later stage: the code, its
+  dependencies and the inputs are now prepared again; only the work before the start is skipped.
+
 ## [0.5.3] - 2026-11-21
 
 ### Added
